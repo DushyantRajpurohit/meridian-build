@@ -359,7 +359,10 @@ Honest ledger of what is still outstanding:
   procedures are written and ordered but carry no number. Drill 4 has been run and timed
   (3s to diagnose, 14s to recover). R41's pull is done and is in `docs/41-audit-logs.md`.
 - **R8** needs a named tunnel with a systemd unit; the three quick tunnels here are supervised
-  by a script and do not survive a reboot unattended.
+  by a script and do not survive a reboot unattended. The supervisor now probes each published
+  hostname every 60s and rebuilds a connector whose hostname has been reaped — see drill 5,
+  the incident that proved it was needed — but a probe is not `Restart=always`, and nothing
+  here starts at boot.
 - **The reviewer's test identity and the recording** are outstanding.
 
 The staff Allow list is six Gmail plus-addresses that all deliver to one inbox. That proves the
