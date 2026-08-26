@@ -42,3 +42,14 @@ output "turnstile_secret" {
   value       = cloudflare_turnstile_widget.public_form.secret
   sensitive   = true
 }
+
+output "reviewer_client_id" {
+  description = "Deliverable 3 — the reviewer's CF-Access-Client-Id, partner API only"
+  value       = cloudflare_zero_trust_access_service_token.reviewer.client_id
+}
+
+output "reviewer_client_secret" {
+  description = "Deliverable 3 — the reviewer's CF-Access-Client-Secret"
+  value       = cloudflare_zero_trust_access_service_token.reviewer.client_secret
+  sensitive   = true
+}

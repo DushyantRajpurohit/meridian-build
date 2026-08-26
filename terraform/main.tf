@@ -122,6 +122,10 @@ resource "cloudflare_zero_trust_access_application" "partner" {
       id         = cloudflare_zero_trust_access_policy.partner_service.id
       precedence = 1
     },
+    {
+      id         = cloudflare_zero_trust_access_policy.reviewer_service.id
+      precedence = 2
+    },
   ]
 }
 
@@ -161,4 +165,31 @@ resource "cloudflare_turnstile_widget" "public_form" {
   # R40's "destroy then apply rebuilds it" claim is only believable if the steady state is
   # genuinely zero changes. Found by running plan again after the first apply.
   domains = sort(var.turnstile_domains)
+}
+
+# ---------------------------------------------------------------------------------------
+# Reviewer access (deliverable 3)
+# ---------------------------------------------------------------------------------------
+
+# A second service token, issued to the reviewer and scoped to the partner API alone. It is a
+# separate token rather than a shared one on purpose: it can be revoked when the review window
+# closes without touching the partner lab's integration, and its calls are distinguishable from
+# the lab's in the audit log (R41) because they carry a different client id.
+resource "cloudflare_zero_trust_access_service_token" "reviewer" {
+  account_id = var.account_id
+  name       = "reviewer"
+  duration   = "8760h"
+}
+
+# Attached to the partner application only. The staff console has no non_identity policy at all,
+# so this token cannot reach it — which is the same boundary R28 tests, expressed in policy
+# rather than in code.
+resource "cloudflare_zero_trust_access_policy" "reviewer_service" {
+  account_id = var.account_id
+  name       = "meridian-reviewer-service-auth"
+  decision   = "non_identity"
+
+  include = [
+    { service_token = { token_id = cloudflare_zero_trust_access_service_token.reviewer.id } }
+  ]
 }

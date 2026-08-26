@@ -6,10 +6,10 @@ step. The times below are recorded on execution; unfilled rows are not yet run a
 
 | # | Procedure | Target | Measured |
 |---|---|---|---|
-| 1 | Staff member leaves — revoke and terminate live session | — | _not yet run_ |
-| 2 | Service token in a public paste — rotate | **< 60s** partner downtime | _not yet run_ |
-| 3 | Tunnel token leaks — assess and respond | — | _not yet run_ |
-| 4 | Staff console down — five-step triage | — | _not yet run_ |
+| 1 | Staff member leaves — revoke and terminate live session | — | _blocked: needs `terraform apply`_ |
+| 2 | Service token in a public paste — rotate | **< 60s** partner downtime | _blocked: needs `terraform apply`_ |
+| 3 | Tunnel token leaks — assess and respond | — | n/a on this path — a quick tunnel has no token |
+| 4 | Staff console down — five-step triage | — | **diagnose 3s, recover 14s, total 17s** |
 
 ---
 
@@ -142,3 +142,35 @@ them in a different order means debugging a healthy component.
 The distinction the runbook is built around: steps 1–3 are **infrastructure** (something is not
 running), steps 4–5 are **policy and identity** (everything is running and refusing on purpose).
 They fail identically from a browser and are fixed completely differently.
+
+### Performed, with a clock
+
+Fault injected deliberately: the origin process killed while the tunnels and the edge stayed up.
+
+```
+t+0s   paged
+step 1  EDGE     colo=BOM http=http/2 loc=IN tls=TLSv1.3   -> edge fine, fault is downstream
+step 2  TUNNEL   4 cloudflared processes alive             -> not the tunnel
+step 3  PROCESS  no listener on 3000-3002                  -> FAULT FOUND
+t+3s   diagnosed
+t+14s  public page back to 200
+```
+
+**Diagnosed in 3 seconds, recovered in 14, total 17.** Steps 4 and 5 were never reached, which
+is the runbook working: the fault was infrastructure, and the ordering meant I never opened a
+policy page or read a token error.
+
+Two honest observations from actually doing it rather than writing it:
+
+**The number is small because the fault was.** I killed a process on a box I was already logged
+into. A real page at 3am — a tunnel that died on a machine that had rebooted, or a policy
+someone edited yesterday — is bounded by access and by knowing where to look, not by these three
+commands. What the drill genuinely establishes is the *ordering*: each step eliminated a layer,
+and no step required the one after it.
+
+**What the user saw during the outage was a Cloudflare 502 HTML page, not my Function's JSON
+error.** With no origin URL in KV at all, the Function returns its own
+`{"error":"bad_gateway"}`. With a URL whose origin is dead, `cloudflared` fails the connection
+and Cloudflare's own error page is passed through. Those are two different failures that look
+alike to a user and are distinguished by whether the body is JSON — worth knowing before
+debugging the wrong layer.
