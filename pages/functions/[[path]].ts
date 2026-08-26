@@ -101,12 +101,26 @@ async function forward(
   headers.set('X-Meridian-Signature', signature.signature)
 
   try {
-    return await fetch(target, {
+    const response = await fetch(target, {
       method: request.method,
       headers,
       body: body.byteLength === 0 ? undefined : body,
       redirect: 'manual',
     })
+
+    // A dead quick tunnel does NOT throw here, which is the trap. Cloudflare answers the
+    // subrequest itself with 530 (error 1033 — "the tunnel exists and has no healthy
+    // connector"), so `fetch` resolves normally and the caller would return that 530 to the
+    // visitor while an isolate holding the stale URL keeps doing so for its whole lifetime.
+    // Found by rotating the tunnel and watching the canonical hostname alternate between 200
+    // and 530 depending on which isolate answered.
+    //
+    // Treating 530 as unreachable is safe because the origin cannot produce one: it is a
+    // Cloudflare edge status, not an application status, and every refusal this origin makes
+    // is a 401/403 with a reason code.
+    if (response.status === 530) return null
+
+    return response
   } catch {
     return null
   }

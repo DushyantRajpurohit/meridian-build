@@ -204,6 +204,36 @@ matches the killing shell's own command line), restart it, and let it republish 
 into KV. **53 seconds**, most of it waiting for three connectors to register. Diagnosis was the
 slower half at roughly ninety seconds, because I began by disbelieving the 530.
 
+### Two bugs the incident exposed, both now fixed
+
+**The supervisor could not see this failure at all.** `scripts/publish-origins.ts` restarted a
+tunnel when the `cloudflared` process *exited*. Here the process never exited — it held
+connections for a hostname that had stopped resolving. A supervisor watching for process death
+is blind to a service that is dead while running. It now probes the hostname it published every
+60 seconds and rebuilds the connector after two consecutive failures. The probe treats **any
+HTTP status as healthy, including 403**: the origin refusing an unsigned request (R19) means the
+whole path worked, so a status code is the success condition and only a thrown `fetch` — DNS or
+connect failing — counts as death.
+
+**The Pages Function turned a rotation into a permanent outage per isolate.** This one is worse,
+and I only found it because the canonical hostname alternated between 200 and 530 after the
+restart depending on which isolate answered. The Function caches the origin URL per isolate and
+drops that cache when the origin stops answering — except a dead quick tunnel **does not throw**
+inside a Worker. Cloudflare answers the subrequest itself with 530 (error 1033), so `fetch`
+resolves normally, the retry path never ran, and the isolate returned that 530 to visitors for
+the rest of its life. The Function now treats a 530 as unreachable, which is safe because the
+origin cannot produce one: 530 is an edge status, and every refusal this origin makes is a
+401/403 with a reason code.
+
+The first request after a rotation can still fail — KV reads are edge-cached, so the retry may
+re-read the stale URL — and then it settles. Ten consecutive 200s after the fix, from a hostname
+that was alternating before it.
+
+**And I made the mistake I had already written down.** Cleaning up, I ran
+`pgrep -f "publish-origins.ts"` and killed the results, which included the shell running the
+command, because its own command line contained the pattern. Exit 144, second time this build.
+Writing a warning into a runbook does not install it in your hands.
+
 **What this actually proves, and it is the point of R8.** A quick tunnel is not a deployment.
 Nothing here crashed, nothing was misconfigured, and the system still went dark on its own
 schedule while I was not looking. A named tunnel under systemd has a stable hostname and
