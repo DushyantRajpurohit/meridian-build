@@ -203,7 +203,24 @@ UNIT
     /etc/systemd/system/cloudflared-private.service
 
   head_ "R8 — the quick-tunnel supervisor as a managed service"
-  NODE_BIN="$(as_user bash -lc 'command -v node')" || die "node not found on ${RUN_USER}'s PATH"
+  # `command -v node` is not good enough here, and the way it fails is quiet. Under runuser it
+  # resolved /usr/bin/node — the distro's Node 18 — while nvm's own default alias on this box
+  # is 20, and the repo needs 24 (.nvmrc; wrangler requires >= 22). The unit then crash-looped
+  # on MODULE_NOT_FOUND, which names no version and reads like a broken install.
+  #
+  # So: source nvm, ask it for the version .nvmrc actually pins, then check the major version
+  # and refuse rather than write a unit that cannot start.
+  NODE_BIN="$(as_user bash -lc "
+    export NVM_DIR=\"\${NVM_DIR:-\$HOME/.nvm}\"
+    [ -s \"\$NVM_DIR/nvm.sh\" ] && . \"\$NVM_DIR/nvm.sh\" >/dev/null 2>&1
+    want=\"\$(cat '${REPO}/.nvmrc' 2>/dev/null || echo node)\"
+    nvm which \"\$want\" 2>/dev/null || command -v node
+  " | tail -n1)"
+  [[ -n "${NODE_BIN}" && -x "${NODE_BIN}" ]] || die "no usable node found for ${RUN_USER} (asked nvm for .nvmrc's version, then PATH)"
+
+  NODE_MAJOR="$("${NODE_BIN}" --version 2>/dev/null | sed -E 's/^v([0-9]+).*/\1/')"
+  [[ "${NODE_MAJOR}" =~ ^[0-9]+$ ]] || die "could not read a version out of ${NODE_BIN}"
+  (( NODE_MAJOR >= 22 )) || die "${NODE_BIN} is Node ${NODE_MAJOR}; this repo needs >= 22 (.nvmrc pins 24). Install it for ${RUN_USER}:  nvm install && nvm use"
   sed -e "s|__USER__|${RUN_USER}|g" -e "s|__REPO__|${REPO}|g" -e "s|__NODE__|${NODE_BIN}|g" \
     "${REPO}/deploy/meridian-origins.service" > /etc/systemd/system/meridian-origins.service
   chmod 0644 /etc/systemd/system/meridian-origins.service

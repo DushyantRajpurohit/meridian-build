@@ -221,3 +221,53 @@ which is the failure mode of R39's full-replace, where an apply silently rewrite
 The one-line summary I would put on the runbook card: **1016 means Cloudflare does not know
 where to send it, 1033 means it knows and nobody is there, 502 means someone was there and it
 did not work.**
+
+## R8 — two ways a unit file looks configured and is not
+
+Both units were written, installed, enabled and reported `active` by `verify` while carrying a
+defect that only showed up under a condition the unit exists to survive. Both are recorded
+here because the *shape* of each mistake generalises: a setting that is silently ignored, and
+an interpreter resolved by the wrong question.
+
+### `StartLimitIntervalSec` in `[Service]`
+
+```
+systemd[1]: /etc/systemd/system/cloudflared-private.service:32:
+            Unknown key name 'StartLimitIntervalSec' in section 'Service', ignoring.
+```
+
+The start rate limiter lives in `[Unit]`. Put it in `[Service]` and systemd ignores it, logs
+that one line, and carries on with the default: five starts in ten seconds, after which the
+unit is marked `failed` and **systemd stops restarting it**. `Restart=always` is still in the
+file, still correct-looking, and no longer true.
+
+The condition that triggers it is precisely the one the setting was added for. A flapping
+uplink makes `cloudflared` exit repeatedly; with `RestartSec=5s`, five exits inside ten seconds
+is reachable, and the connector then stays down until someone notices — through an outage,
+which is when nobody is reading `journalctl` for `Unknown key name`. The comment in the file
+explained the reasoning perfectly and sat above a line that did nothing.
+
+Fixed in both units, with `StartLimitBurst=0` alongside it, and the comment moved to the
+section that actually reads the setting.
+
+### `command -v node` resolved the wrong Node
+
+`meridian-origins.service` crash-looped on:
+
+```
+code: 'MODULE_NOT_FOUND'
+Node.js v18.19.1
+```
+
+`root-setup.sh` picked the interpreter with `as_user bash -lc 'command -v node'`. Under
+`runuser` that returned `/usr/bin/node` — the distro's Node 18 — even though nvm's default
+alias for this user is 20 and `.nvmrc` pins **24**. Three different answers to "where is node",
+and the question as asked chose the worst one.
+
+The error names no version. `MODULE_NOT_FOUND` reads as a broken `node_modules`, and the
+obvious next move — reinstall dependencies — is wrong and costs time. The version line is the
+only clue, and it is the last line of a stack trace.
+
+Fixed by asking a better question: source `nvm`, resolve the version `.nvmrc` names, then
+**assert the major version is at least 22** and refuse to write the unit otherwise. A unit that
+cannot start is worse than a stage that stops, because the stage tells you why.

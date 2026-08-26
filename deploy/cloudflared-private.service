@@ -13,6 +13,15 @@ Wants=network-online.target
 # Not Requires=: if the network comes up late, Restart=always retries anyway, and a hard
 # dependency here means a transient DHCP failure leaves the operator locked out of the box.
 
+# [Unit], not [Service]. systemd moved the start rate limiter here, and a modern systemd
+# silently ignores it in [Service] with only `Unknown key name ... ignoring` in the journal —
+# so the unit looks configured, logs a warning nobody reads, and keeps the default limit.
+# Without this, five fast failures inside 10s put the unit in `failed` and systemd stops
+# trying: the connector would stay down through exactly the flapping-network condition that
+# Restart=always was chosen for.
+StartLimitIntervalSec=0
+StartLimitBurst=0
+
 [Service]
 Type=notify
 
@@ -26,10 +35,8 @@ ExecStart=/usr/local/bin/cloudflared --no-autoupdate --config /etc/cloudflared/c
 
 Restart=always
 RestartSec=5s
-# Without this, five fast failures inside 10s put the unit in `failed` and systemd stops
-# trying — the connector would stay down through exactly the flapping-network condition
-# Restart=always was chosen for.
-StartLimitIntervalSec=0
+# The rate limiter that would otherwise defeat Restart=always is turned off in [Unit] above,
+# because that is the section systemd reads it from. See the note there.
 
 User=cloudflared
 Group=cloudflared

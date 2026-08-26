@@ -15,6 +15,11 @@ Description=Meridian quick-tunnel supervisor (publishes rotating origins to KV)
 After=network-online.target
 Wants=network-online.target
 
+# [Unit], not [Service] — see the note in cloudflared-private.service. Ignored in the wrong
+# section, and only a `Unknown key name` warning says so.
+StartLimitIntervalSec=0
+StartLimitBurst=0
+
 [Service]
 Type=simple
 User=__USER__
@@ -29,7 +34,8 @@ ExecStart=__NODE__ __REPO__/node_modules/.bin/tsx --env-file=.env scripts/publis
 # own signal-0 check, so no ExecStartPre cleanup is needed here (drill 6).
 Restart=always
 RestartSec=10s
-StartLimitIntervalSec=0
+# The start rate limiter is disabled in [Unit] above — that is the section systemd reads it
+# from, and it is ignored with a journal warning if it appears here.
 
 # Kill the whole group: the supervisor spawns three cloudflared children, and stopping only
 # the parent leaves three orphaned connectors serving hostnames nothing points at — which is
