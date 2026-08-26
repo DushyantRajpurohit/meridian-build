@@ -13,15 +13,16 @@ it and R24 has a live bypass to close, and the origin sits behind a public
 
 | Section | State |
 |---|---|
-| §4 Origin enforcement (R17–R24) | **built, tested** — including R24 against both bypass routes |
-| §5 Machine-to-machine (R25–R28) | origin half built and tested; needs a real service token |
-| §6 Public surface (R29–R32) | **built, tested** — rate limiter and filtering rule in the Pages Function, Turnstile and webhook signature at the origin |
-| §11 free-path plumbing | Pages Function, edge signature and the tunnel supervisor written; nothing deployed |
 | §1 Edge and transport (R1–R5) | **written** — R2/R3 are written answers on this path, see `docs/` |
-| §2 Connectivity (R6–R11) | R7/R9/R11 **written**, R7 verified against `cloudflared`; R6/R8 need the live box; R10 unavailable on this path |
-| §8 Infrastructure as code (R37–R40) | **written, validated, planned** — 10 resources, not yet applied |
-| §9 Ops and threat model (R41–R43) | R43 **written**; R42's four runbooks written but not yet timed; R41 needs live logs |
-| §3, §5 live half, §7 | not started — all need the apply, and §7 needs `sshd` and root |
+| §2 Connectivity (R6–R11) | R7/R9/R11 **written**, R7 verified against `cloudflared`; R6 needs `ufw` (root); R8 needs a named tunnel; R10 unavailable on this path |
+| §3 Identity and policy (R12–R16) | **live** — OTP IdP, both applications, Block above Allow verified at Cloudflare |
+| §4 Origin enforcement (R17–R24) | **live** — both R24 bypass routes closed with the origin's own refusals |
+| §5 Machine-to-machine (R25–R28) | **live** — a real service token reads the partner API end to end |
+| §6 Public surface (R29–R32) | **live** — rate limit, user-agent rule and Turnstile all firing at the edge |
+| §8 Infrastructure as code (R37–R40) | **applied** — 10 resources, plan clean; R40's destroy/rebuild not yet exercised |
+| §9 Ops and threat model (R41–R43) | R43 **written**; R42's runbooks written but not timed; R41 needs the audit-log pull |
+| §7 Operational access (R33–R36) | not started — needs `sshd` and root |
+| §11 free-path plumbing | **deployed** — Function, edge signature and three quick tunnels live |
 
 **38 tests green** on Node 24, none of which need a Cloudflare account.
 
@@ -344,10 +345,24 @@ TTL and no client-IP restriction (this box is on a hotspot with a changing addre
 
 ## Not yet true
 
-Nothing here has met Cloudflare. There is no account, no tunnel, no Access application, and
-`cloudflared`, `terraform` and `wrangler` are not installed on the box. The enforcement code
-is written against the token format and proven against a local team that mints the same
-shape; the live half of every requirement is still ahead.
+Honest ledger of what is still outstanding:
+
+- **§7 (R33–R36) is untouched.** `sshd` is inactive on the box and enabling it needs root, so
+  SSH through Access, the LAN-rule deletion and reboot, and WARP enrolment are all ahead.
+- **R6's firewall half.** No non-loopback listener exists and every surface binds `127.0.0.1`,
+  but `ufw default deny incoming` needs root and has not been set.
+- **R40 has not been exercised.** The plan is clean and the configuration is complete, but
+  `destroy` followed by `apply` has not actually been run end to end.
+- **R41's audit-log pull** has not been done, and **R42's four procedures are written but not
+  timed** — the numbers must come from performing them, not from estimating them.
+- **R8** needs a named tunnel with a systemd unit; the three quick tunnels here are supervised
+  by a script and do not survive a reboot unattended.
+- **The reviewer's test identity and the recording** are outstanding.
+
+The staff Allow list is six Gmail plus-addresses that all deliver to one inbox. That proves the
+policy scopes per-identity; it does not prove six independent people exist. Under one-time PIN
+the inbox *is* the identity, so those six are one identity in security terms — see the threat
+model, which says so about itself.
 
 ## Toolchain
 
