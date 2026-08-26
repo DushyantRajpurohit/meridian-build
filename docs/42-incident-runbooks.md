@@ -10,6 +10,7 @@ step. The times below are recorded on execution; unfilled rows are not yet run a
 | 2 | Service token in a public paste — rotate | **< 60s** partner downtime | _blocked: needs `terraform apply`_ |
 | 3 | Tunnel token leaks — assess and respond | — | n/a on this path — a quick tunnel has no token |
 | 4 | Staff console down — five-step triage | — | **diagnose 3s, recover 14s, total 17s** |
+| 5 | *Unplanned:* the quick tunnels died on their own | — | **diagnose ~90s, recover 53s** |
 
 ---
 
@@ -174,3 +175,37 @@ error.** With no origin URL in KV at all, the Function returns its own
 and Cloudflare's own error page is passed through. Those are two different failures that look
 alike to a user and are distinguished by whether the body is JSON — worth knowing before
 debugging the wrong layer.
+
+---
+
+## 5 — The one I did not schedule
+
+This was not a drill. Checking the live URLs before submission, the canonical hostname returned
+**530** while `staff.` and `api.` still returned their expected 302 and 403 — because those two
+are refused by Access at the edge and never reach the origin path at all. Only the public
+hostname actually exercises the tunnel, so only it could show the fault.
+
+The runbook found it in the order it is written in:
+
+```
+step 1  EDGE      302/403 on the Access-bound hosts        -> edge fine
+step 3  PROCESS   127.0.0.1:3000/3001/3002 all answer 403  -> origin alive and refusing correctly
+step 2  TUNNEL    curl <quick-tunnel-url>  ->  000         -> FAULT: the hostnames no longer resolve
+```
+
+The three `cloudflared` processes were **still running**. That is the detail worth keeping: a
+live connector process is not a live tunnel. The quick tunnel hostnames had been reaped at
+Cloudflare's end, so the processes were holding connections for names that no longer existed,
+and nothing on the box reported an error. `curl` returning `000` rather than an HTTP status is
+the tell — that is DNS failing, not an origin refusing.
+
+Recovery: kill the supervisor and its connectors by PID (from `pgrep`, not `pkill -f`, which
+matches the killing shell's own command line), restart it, and let it republish three new URLs
+into KV. **53 seconds**, most of it waiting for three connectors to register. Diagnosis was the
+slower half at roughly ninety seconds, because I began by disbelieving the 530.
+
+**What this actually proves, and it is the point of R8.** A quick tunnel is not a deployment.
+Nothing here crashed, nothing was misconfigured, and the system still went dark on its own
+schedule while I was not looking. A named tunnel under systemd has a stable hostname and
+`Restart=always`; this has neither, and the ledger in the README says so. This incident is the
+evidence for that claim rather than an embarrassment to be tidied out of it.
