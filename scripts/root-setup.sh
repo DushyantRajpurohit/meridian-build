@@ -349,9 +349,24 @@ stage_verify() {
   ufw status verbose | head -8
 
   head_ "R8 — units"
+  # `activating` is not a pass, and it is the state a crash-looping unit sits in forever:
+  # Restart=always keeps rescheduling it, so it is never `failed` and never `active` either.
+  # The first version of this check printed the word and moved on, and meridian-origins was
+  # read as merely slow to start for 206 restarts. If systemd has restarted a unit more than
+  # a couple of times, say so and quote the reason.
   for u in cloudflared-private meridian-origins meridian-ops-address; do
-    printf '  %-24s enabled=%-8s active=%s\n' "$u" \
-      "$(systemctl is-enabled "$u" 2>&1)" "$(systemctl is-active "$u" 2>&1)"
+    local st en n
+    en="$(systemctl is-enabled "$u" 2>&1)"
+    st="$(systemctl is-active "$u" 2>&1)"
+    printf '  %-24s enabled=%-8s active=%s\n' "$u" "${en}" "${st}"
+    n="$(systemctl show -p NRestarts --value "$u" 2>/dev/null || echo 0)"
+    if [[ "${st}" != "active" ]]; then
+      echo "    FINDING: not active. Last error:"
+      journalctl -u "$u" -p err -n 3 --no-pager -o cat 2>/dev/null | sed 's/^/      /'
+      echo "      full log: journalctl -u $u -n 50"
+    elif [[ "${n}" =~ ^[0-9]+$ ]] && (( n > 3 )); then
+      echo "    FINDING: active now, but systemd has restarted it ${n} times — it is flapping."
+    fi
   done
 
   head_ "R35 — the operations address"

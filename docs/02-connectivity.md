@@ -271,3 +271,30 @@ only clue, and it is the last line of a stack trace.
 Fixed by asking a better question: source `nvm`, resolve the version `.nvmrc` names, then
 **assert the major version is at least 22** and refuse to write the unit otherwise. A unit that
 cannot start is worse than a stage that stops, because the stage tells you why.
+
+### A space in the repository path
+
+The Node 24 fix landed and the unit still crash-looped, now with a better error:
+
+```
+Error: Cannot find module '/home/dushyant/Documents/Ayush'
+Node.js v24.19.0
+```
+
+This repository lives under `~/Documents/Ayush HealthCare/…`. systemd splits `ExecStart=` on
+whitespace, so the substituted repo path became **two arguments** and `node` was handed
+`/home/dushyant/Documents/Ayush` as the script to run. `WorkingDirectory=` was unaffected —
+it is a single-value setting and takes the rest of the line — which is why the unit started at
+all and failed one layer further in.
+
+Fixed by quoting both substituted paths in `ExecStart`, which is systemd's documented answer
+and does not depend on `WorkingDirectory` staying where it is.
+
+Two things generalise. **The truncated path is the whole diagnosis** and it is easy to skim
+past: `MODULE_NOT_FOUND` on a path that is a *prefix* of the real one is a quoting bug every
+time, in systemd units, shell scripts and `Dockerfile` `CMD` alike. And **`Restart=always`
+converts a crash into a silence** — the unit never reaches `failed`, so it sits in
+`activating (auto-restart)` indefinitely and every status check reports a word that is not
+"failed". `verify` now treats anything other than `active` as a finding, prints the last error
+lines from the journal, and separately flags a unit whose `NRestarts` has climbed, because a
+unit that is `active` on its 206th attempt is not healthy either.

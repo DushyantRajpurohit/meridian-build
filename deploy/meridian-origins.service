@@ -28,7 +28,14 @@ WorkingDirectory=__REPO__
 
 # The supervisor loads .env itself via tsx --env-file, so no EnvironmentFile here and no
 # secret in this unit.
-ExecStart=__NODE__ __REPO__/node_modules/.bin/tsx --env-file=.env scripts/publish-origins.ts
+#
+# The quotes are load-bearing. systemd splits ExecStart on whitespace, and this repository
+# lives under a path containing a space ("Ayush HealthCare"), so an unquoted __REPO__ becomes
+# two arguments: node is handed `/home/dushyant/Documents/Ayush` as its script and exits with
+# MODULE_NOT_FOUND naming a truncated path. Restart=always then hides it as a unit stuck in
+# `activating` rather than a unit that failed — 206 restarts before anyone read the journal.
+# Quoting is systemd's documented answer and survives WorkingDirectory being changed later.
+ExecStart="__NODE__" "__REPO__/node_modules/.bin/tsx" --env-file=.env scripts/publish-origins.ts
 
 # The lock the supervisor takes lives in /tmp; a stale one after a hard kill is cleared by its
 # own signal-0 check, so no ExecStartPre cleanup is needed here (drill 6).
