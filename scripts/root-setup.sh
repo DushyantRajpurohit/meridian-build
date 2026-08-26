@@ -34,7 +34,18 @@ head_() { echo; echo "== $* =="; }
 
 # Run something as the invoking user. Used for every read of the repo, so root never has to
 # be trusted with — or blamed for — the contents of .env and terraform.tfstate.
-as_user() { runuser -u "${RUN_USER}" -- "$@"; }
+#
+# The env PATH is not decoration. `runuser -u` drops privileges but does NOT source the
+# target user's profile, so the command inherits root's PATH — which under sudo is the
+# `secure_path` from /etc/sudoers, and that deliberately excludes ~/.local/bin. terraform
+# lives there. Without this line `tf.sh` dies on "terraform: command not found" and every
+# read below fails identically to the resource genuinely being absent.
+# Resolved through a login shell, and `tail -n1` because a chatty .bashrc will print ahead of
+# the answer and the last line is the one `command -v` wrote. Slurping the whole PATH out of
+# that shell instead would inherit the same noise as a PATH entry.
+TF_DIR="$(runuser -l "${RUN_USER}" -c 'command -v terraform' 2>/dev/null | tail -n1)"
+TF_DIR="${TF_DIR:+$(dirname "${TF_DIR}")}"
+as_user() { runuser -u "${RUN_USER}" -- env PATH="${TF_DIR:+${TF_DIR}:}${PATH}" "$@"; }
 
 PRIVATE_IP="$(as_user "${REPO}/terraform/tf.sh" output -raw private_host_ip 2>/dev/null || echo '10.99.0.1')"
 
@@ -50,7 +61,23 @@ PRIVATE_IP="$(as_user "${REPO}/terraform/tf.sh" output -raw private_host_ip 2>/d
 preflight() {
   local missing=()
   local state
-  state="$(as_user "${REPO}/terraform/tf.sh" state list 2>/dev/null || true)"
+  local rc=0
+
+  # 2>&1 and not 2>/dev/null. An unreadable state and an unapplied account are different
+  # problems with opposite fixes, and swallowing stderr renders them identical: an empty
+  # string fails all five greps below and reports a fully-applied account as missing
+  # everything. If terraform could not speak, say so and stop — do not diagnose.
+  state="$(as_user "${REPO}/terraform/tf.sh" state list 2>&1)" || rc=$?
+  if [[ ${rc} -ne 0 ]]; then
+    echo "root-setup: could not read the terraform state as ${RUN_USER}. That is not the" >&2
+    echo "same as the resources being absent, so I am not going to guess which it is." >&2
+    echo >&2
+    printf '  %s\n' "${state}" >&2
+    echo >&2
+    echo "Fix that first, then re-run. Sanity check as yourself, not as root:" >&2
+    echo "  cd terraform && ./tf.sh state list" >&2
+    exit 1
+  fi
 
   grep -q 'cloudflare_zero_trust_tunnel_cloudflared\.private'          <<<"${state}" || missing+=("the named tunnel")
   grep -q 'cloudflare_zero_trust_tunnel_cloudflared_route\.box'        <<<"${state}" || missing+=("the /32 private route")
@@ -64,13 +91,17 @@ preflight() {
   printf '  - %s\n' "${missing[@]}" >&2
   cat >&2 <<'MSG'
 
-The three Zero Trust resources need an API token scope the current token lacks. Check it:
+Apply the Cloudflare side first:  cd terraform && ./tf.sh apply
+
+If that apply fails 403 on exactly these resources, the API token is missing the Zero Trust
+scope rather than anything being wrong with the config. Confirm which it is:
 
   curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $CF_API_TOKEN" \
     https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT_ID/gateway/rules
 
-403 means the scope is missing. Add Account -> Zero Trust -> Edit to the token, put the new
-value in .env, then:  cd terraform && ./tf.sh apply
+403 there means the scope is missing: add Account -> Zero Trust -> Edit to the existing token
+and re-run the apply. Editing a token's permissions keeps its secret value, so .env does not
+change — do not go looking for a new one to paste.
 
 MSG
   exit 1

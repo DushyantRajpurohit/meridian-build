@@ -189,3 +189,29 @@ every run trains you to read "2 to change" as normal, and the day a real change 
 noise you scroll past it. The fix is to make the configuration state what the server will
 actually do — the app's real name, the address's real case — and let the comment carry the
 meaning the value no longer can.
+
+## The preflight that reported a working account as empty
+
+`root-setup.sh base` opens with a preflight, because the failure it prevents is the worst one
+in this build: install the connector while the Zero Trust resources are missing and `ssh
+10.99.0.1` opens a connection that goes nowhere, WARP calls the address local and puts it on
+the wifi, and Cloudflare never sees the attempt — nothing in any log to read.
+
+The first run of it printed all five resources as missing against an account where all five
+were live. Two bugs, one cause:
+
+**`runuser -u` does not source the target user's profile.** It drops privileges and keeps the
+environment it was handed, which under `sudo` is the `secure_path` from `/etc/sudoers` — and
+that deliberately excludes `~/.local/bin`, which is where `terraform` is installed here. So
+`tf.sh` ended at `terraform: command not found`. The two call sites that used `bash -lc` were
+unaffected, which is why `cloudflared` and `node` resolved fine and only the state reads broke.
+
+**`2>/dev/null || true` turned that into a diagnosis.** An unreadable state and an unapplied
+account are different problems with opposite fixes, and discarding stderr renders them
+identical: the empty string fails all five `grep`s and the script confidently names five
+resources it never actually looked for. A guard that cannot tell "I could not check" from "I
+checked and it is absent" is worse than no guard, because it is believed.
+
+Both fixed: the invoking user's `terraform` directory is resolved once through a login shell
+and prepended to the PATH `as_user` hands out, and a non-zero exit from `terraform state list`
+now stops with the error terraform actually printed instead of being read as absence.
