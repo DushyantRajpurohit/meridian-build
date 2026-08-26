@@ -13,7 +13,9 @@
     "typecheck": "tsc -p tsconfig.json && tsc -p pages/tsconfig.json",
     "test": "vitest run",
     "pages:deploy": "./scripts/render-wrangler.sh && cd pages && ../node_modules/.bin/wrangler pages deploy",
-    "pages:dev": "./scripts/render-wrangler.sh && cd pages && ../node_modules/.bin/wrangler pages dev"
+    "pages:dev": "./scripts/render-wrangler.sh && cd pages && ../node_modules/.bin/wrangler pages dev",
+    "pages:secrets": "./scripts/set-pages-secrets.sh",
+    "env:sync": "./scripts/sync-env-from-terraform.sh"
   },
   "dependencies": {
     "express": "4.22.2",
