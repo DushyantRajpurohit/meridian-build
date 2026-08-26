@@ -9,24 +9,30 @@
     "dev": "tsx watch --env-file=.env src/index.ts",
     "forge": "tsx scripts/forge.ts",
     "rehearse": "tsx scripts/rehearsal.ts",
-    "lint": "oxlint -c ../.oxlintrc.json src scripts test",
+    "lint": "oxlint -c .oxlintrc.json src scripts test",
     "typecheck": "tsc -p tsconfig.json && tsc -p pages/tsconfig.json",
     "test": "vitest run",
     "deploy": "wrangler pages deploy pages/public --project-name meridian-clinic",
     "edge:dev": "wrangler pages dev pages/public"
   },
   "dependencies": {
-    "express": "catalog:",
-    "jose": "catalog:"
+    "express": "4.22.2",
+    "jose": "6.2.10"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "catalog:",
-    "@types/express": "catalog:",
-    "@types/node": "catalog:",
-    "oxlint": "catalog:",
-    "tsx": "catalog:",
-    "typescript": "catalog:",
-    "vitest": "catalog:",
-    "wrangler": "catalog:"
+    "@cloudflare/workers-types": "5.20260825.1",
+    "@types/express": "4.17.25",
+    "@types/node": "24.13.3",
+    "oxlint": "1.79.0",
+    "tsx": "4.23.12",
+    "typescript": "6.0.3",
+    "vitest": "3.2.7",
+    "wrangler": "4.126.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "workerd"
+    ]
   }
 }

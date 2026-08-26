@@ -1,0 +1,4 @@
+{
+  "categories": { "correctness": "error" },
+  "ignorePatterns": ["dist", "node_modules", "target", "public/fixtures"]
+}
