@@ -14,14 +14,14 @@ it and R24 has a live bypass to close, and the origin sits behind a public
 | Section | State |
 |---|---|
 | §1 Edge and transport (R1–R5) | **written** — R2/R3 are written answers on this path, see `docs/` |
-| §2 Connectivity (R6–R11) | R7/R9/R11 **written**; R7 is now a real ingress table in `deploy/cloudflared-private.yml`, not only an explanation. R6's firewall and R8's units are **written and staged** in `scripts/root-setup.sh`, pending one `sudo` run; R10 unavailable on this path |
+| §2 Connectivity (R6–R11) | R7/R9/R11 **written**; R7 is a real ingress table in `deploy/cloudflared-private.yml`. R6 and R8 are **live** — ufw default-deny, sshd bound to `10.99.0.1` only, three enabled systemd units; R10 now possible via the named tunnel but not done |
 | §3 Identity and policy (R12–R16) | **live** — OTP IdP, both applications, Block above Allow verified at Cloudflare |
 | §4 Origin enforcement (R17–R24) | **live** — both R24 bypass routes closed with the origin's own refusals |
 | §5 Machine-to-machine (R25–R28) | **live** — a real service token reads the partner API end to end |
 | §6 Public surface (R29–R32) | **live** — rate limit, user-agent rule and Turnstile all firing at the edge |
 | §8 Infrastructure as code (R37–R40) | **applied and rebuilt** — 12 resources destroyed and recreated end to end in 291s, no dashboard click; see [`docs/40-rebuild.md`](docs/40-rebuild.md) |
 | §9 Ops and threat model (R41–R43) | **done** — R41's audit-log pull, R43's threat model, and six timed drills, two of them unplanned incidents |
-| §7 Operational access (R33–R36) | **Cloudflare side live, box side pending one `sudo` run** — named tunnel, /32 private route, WARP enrolment app, split-tunnel profile and both Gateway policies applied, plan clean; see [`docs/07-operational-access.md`](docs/07-operational-access.md) |
+| §7 Operational access (R33–R36) | **built and live; `lockdown` not run, R33 unproven without a second device** — named tunnel, /32 private route, WARP enrolment app, split-tunnel profile and both Gateway policies applied, plan clean; see [`docs/07-operational-access.md`](docs/07-operational-access.md) |
 | §11 free-path plumbing | **deployed** — Function, edge signature and three quick tunnels live |
 
 **38 tests green** on Node 24, none of which need a Cloudflare account.
@@ -370,35 +370,35 @@ TTL and no client-IP restriction (this box is on a hotspot with a changing addre
 
 Honest ledger of what is still outstanding:
 
-- **§7 (R33–R36): the Cloudflare half is live, the box half is not.** All seven resources —
-  named tunnel, `10.99.0.1/32` route, WARP enrolment application and policy, split-tunnel
-  profile, and both Gateway L4 policies — are applied and `terraform plan` reports *No
-  changes*. What remains is one `sudo bash scripts/root-setup.sh base` to install the
-  connector unit, sshd, WARP and the loopback address, then a WARP registration, then
-  `verify`. R34's reboot (`lockdown`) is a deliberate, confirmed step after `ssh
-  dushyant@10.99.0.1` has worked once. The browser-rendered SSH client R33 names is
-  permanently unavailable without a zone, and `docs/07` says so.
-- **R6's firewall half.** No non-loopback listener exists and every surface binds `127.0.0.1`,
-  but `ufw default deny incoming` needs root. The rules are written in `root-setup.sh base`.
-- **R42: all four runnable drills are performed and timed, plus two unplanned ones.** 1
-  (leaver) 67s; 2 (token rotation) **96s against a 60s target — missed**, for reasons written up
-  rather than smoothed over; 4 (console down) 3s to diagnose and 14s to recover; 5 (unplanned,
-  the tunnels died on their own) ~90s and 53s; 6 (unplanned, they died again for a different
-  reason) 90s to recover. R41's audit-log pull is done. Drill 3 has no counterpart on this
-  path — a quick tunnel has no token to leak.
-- **R8** needs a named tunnel with a systemd unit; the three quick tunnels here are supervised
-  by a script and do not survive a reboot unattended. The supervisor now probes each published
-  hostname every 60s and rebuilds a connector whose hostname has been reaped, takes an exclusive
-  lock so a second supervisor cannot race it on the same KV keys, asks a control URL before
-  writing a total failure off as a local outage, and requires the three-hyphenated-word shape a
-  quick tunnel is always named with so cloudflared's own `api.trycloudflare.com` cannot be
-  published as an origin — drills 5 and 6 are the incidents that proved each of those needed —
-  but a probe is not `Restart=always`, and nothing here starts at boot.
-- **R10 was unavailable and now is not.** The claim above that two connectors cannot serve one
-  tunnel is true of a *quick* tunnel and was written when this build had only those. §7 created
-  a named tunnel with a credentials file, so a second `cloudflared` replica against
-  `meridian-private` is now possible. It is not done, and the sentence stays here rather than
-  being quietly deleted.
+- **R34's `lockdown` has not been run.** Everything it depends on is in place — sshd answers on
+  `10.99.0.1:22` and nowhere else, key-only authentication, WARP connected with the split-tunnel
+  profile applied. What remains is the deliberate step: delete the LAN SSH rule and reboot, with
+  the physical console as the documented fallback. It is one command and it is not run yet.
+- **R33 has not been demonstrated, and cannot be from this box.** `10.99.0.1/32` is assigned to
+  `lo` here, so the kernel's `local` table answers before WARP is consulted: `ssh
+  dushyant@10.99.0.1` typed on this machine is loopback and succeeds with WARP switched off. The
+  proof needs a second device enrolled in the same WARP team. See `docs/07`.
+- **The public surface is down right now**, and it is self-inflicted. A cascade of unit bugs
+  crash-looped the tunnel supervisor 258 times at three quick tunnels a restart, which earned a
+  `1015` rate limit on quick-tunnel creation. `staff.` and `api.` are unaffected (Access refuses
+  them at the edge, before the origin), but the canonical host returns 502 until the throttle
+  expires. The supervisor now recognises 429/1015 and waits it out rather than deepening it.
+  Drill 7 in `docs/42` is the write-up.
+- **R42: seven drills, five of them unplanned.** 1 (leaver) 67s; 2 (token rotation) **96s
+  against a 60s target — missed**, for reasons written up rather than smoothed over; 4 (console
+  down) 3s to diagnose, 14s to recover; 5 (tunnels died) ~90s and 53s; 6 (died again, different
+  cause) 90s; 7 (self-inflicted rate limit) diagnosed in 10s by hand and not visible in the log
+  at all, which was the finding. Drill 3 has no counterpart here — a quick tunnel has no token
+  to leak.
+- **R10 was unavailable and now is not.** The claim elsewhere that two connectors cannot serve
+  one tunnel is true of a *quick* tunnel and was written when this build had only those. §7
+  created a named tunnel with a credentials file, so a second `cloudflared` replica against
+  `meridian-private` is now possible. It is not done, and the sentence stays rather than being
+  quietly deleted.
+- **The three origin apps are not under systemd.** The connector and the supervisor are
+  (`cloudflared-private`, `meridian-origins`, `meridian-ops-address` — all enabled, all survive
+  a reboot). The Node surfaces on 3000–3002 are still started by hand, so R8 is satisfied for
+  the tunnel path and not for the applications behind it.
 - **The screen recording** is outstanding.
 
 The staff Allow list is six Gmail plus-addresses that all deliver to one inbox. That proves the
