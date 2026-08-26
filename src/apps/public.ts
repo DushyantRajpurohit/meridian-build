@@ -36,7 +36,7 @@ export function createPublicApp(config: MeridianConfig, options: PublicAppOption
   const replayCache = new ReplayCache()
 
   app.get('/', (_req, res) => {
-    res.type('html').send(bookingPage(options.turnstileSiteKey ?? ''))
+    res.type('html').send(bookingPage(options.turnstileSiteKey ?? config.turnstileSiteKey))
   })
 
   // R31 — the token is verified server-side before anything is written. A Turnstile widget

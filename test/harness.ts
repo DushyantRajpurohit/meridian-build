@@ -79,6 +79,7 @@ export async function createFakeTeam(options: FakeTeamOptions = {}): Promise<Fak
     requireEdgeSignature: options.requireEdgeSignature ?? false,
     labWebhookSecret: 'lab-secret-for-tests',
     turnstileSecret: 'turnstile-secret-for-tests',
+    turnstileSiteKey: '1x00000000000000000000AA',
     bindHost: '127.0.0.1',
     ports: { public: 0, admin: 0, partner: 0 },
   }

@@ -60,6 +60,7 @@ const config: MeridianConfig = {
   requireEdgeSignature: true,
   labWebhookSecret: LAB_SECRET,
   turnstileSecret: 'rehearsal-turnstile-secret-that-cloudflare-will-reject',
+  turnstileSiteKey: '1x00000000000000000000AA',
   bindHost: '127.0.0.1',
   ports: { public: 3000, admin: 3001, partner: 3002 },
 }

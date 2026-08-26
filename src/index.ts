@@ -12,7 +12,7 @@ import { loadConfig } from './config'
 const config = loadConfig()
 
 const surfaces = [
-  { name: 'public ', port: config.ports.public, app: createPublicApp(config, { turnstileSiteKey: process.env.TURNSTILE_SITE_KEY }) },
+  { name: 'public ', port: config.ports.public, app: createPublicApp(config, { turnstileSiteKey: config.turnstileSiteKey }) },
   { name: 'admin  ', port: config.ports.admin, app: createAdminApp(config) },
   { name: 'partner', port: config.ports.partner, app: createPartnerApp(config) },
 ]

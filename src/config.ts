@@ -24,6 +24,15 @@ export interface MeridianConfig {
   labWebhookSecret: string
   /** R31 — verified server-side on every booking. */
   turnstileSecret: string
+  /**
+   * R31 — public by design; it is embedded in the booking page so the widget can render.
+   *
+   * Required rather than optional-with-a-default. An empty sitekey renders a widget that
+   * silently produces no token, so every booking is then refused with `turnstile_missing` —
+   * a runtime mystery on a page that looks fine. Failing at startup turns a misconfiguration
+   * into a message that names the variable.
+   */
+  turnstileSiteKey: string
   bindHost: string
   ports: { public: number; admin: number; partner: number }
 }
@@ -46,6 +55,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): MeridianConfig
     requireEdgeSignature: env.REQUIRE_EDGE_SIGNATURE !== 'false',
     labWebhookSecret: required(env, 'LAB_WEBHOOK_SECRET'),
     turnstileSecret: required(env, 'TURNSTILE_SECRET'),
+    turnstileSiteKey: required(env, 'TURNSTILE_SITE_KEY'),
     // R7 trap — bind the literal IPv4 loopback. `localhost` may resolve to ::1 first, and a
     // tunnel pointed at 127.0.0.1 then sees an intermittent connection refused that reads as
     // a Cloudflare fault.
