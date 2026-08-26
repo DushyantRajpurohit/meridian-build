@@ -298,3 +298,20 @@ disagreed. `pnpm test`, `pnpm typecheck` and `pnpm lint` all pass on Node 24.
 
 **Note:** `workerd` is in `onlyBuiltDependencies` for the same reason `esbuild` is: it fetches a
 platform binary in a postinstall, and without the approval `wrangler pages dev` cannot start.
+
+### Why this repo does not use the parent workspace's catalog
+
+The other five JS projects in this repository's parent directory share a pnpm catalog, so a
+dependency has one version across all of them. This project deliberately does not: it ships as
+its own public repository, and a reviewer clones *this* directory, not its parent. With
+`catalog:` references, `pnpm install` in a fresh clone fails with
+`ERR_PNPM_CATALOG_ENTRY_NOT_FOUND_FOR_SPEC` — which I found by cloning to a scratch path and
+running it, rather than by assuming it worked.
+
+So the versions here are the exact ones the catalog resolved to, `tsconfig.base.json` and
+`.oxlintrc.json` are vendored rather than referenced one level up, and
+`pnpm.onlyBuiltDependencies` is repeated in `package.json`. Pinning exactly is the right
+default for a submitted artifact anyway: it is pinned to what was actually tested.
+
+Verified end to end — a clean clone with no parent directory present installs, then passes 38
+tests, both typecheck programs, and lint.
