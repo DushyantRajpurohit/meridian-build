@@ -356,8 +356,13 @@ stage_verify() {
   # a couple of times, say so and quote the reason.
   for u in cloudflared-private meridian-origins meridian-ops-address; do
     local st en n
-    en="$(systemctl is-enabled "$u" 2>&1)"
-    st="$(systemctl is-active "$u" 2>&1)"
+    # `|| true` on both, and it is not defensive noise. `systemctl is-active` exits 3 for
+    # `activating`, and under `set -e` a standalone assignment from a failing command
+    # substitution kills the script — so this stage aborted silently at the first unhealthy
+    # unit, which is the one case it exists to report. The earlier version survived only
+    # because the substitutions were printf arguments, where their exit status is discarded.
+    en="$(systemctl is-enabled "$u" 2>&1 || true)"
+    st="$(systemctl is-active "$u" 2>&1 || true)"
     printf '  %-24s enabled=%-8s active=%s\n' "$u" "${en}" "${st}"
     n="$(systemctl show -p NRestarts --value "$u" 2>/dev/null || echo 0)"
     if [[ "${st}" != "active" ]]; then

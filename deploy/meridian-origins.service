@@ -35,7 +35,14 @@ WorkingDirectory=__REPO__
 # MODULE_NOT_FOUND naming a truncated path. Restart=always then hides it as a unit stuck in
 # `activating` rather than a unit that failed — 206 restarts before anyone read the journal.
 # Quoting is systemd's documented answer and survives WorkingDirectory being changed later.
-ExecStart="__NODE__" "__REPO__/node_modules/.bin/tsx" --env-file=.env scripts/publish-origins.ts
+# ...and `node_modules/tsx/dist/cli.mjs`, not `node_modules/.bin/tsx`. The `.bin` entry is
+# npm's shell shim — it is a /bin/sh script that locates node and re-execs. Handing it to node
+# makes node parse shell as JavaScript, and the error says so only if you recognise the line
+# it quotes: `SyntaxError: missing ) after argument list` pointing at
+# `basedir=$(dirname "$(echo "$0" | ...)")`. Running the shim directly instead would work in a
+# terminal and fail here, because the shim needs node on PATH and systemd gives a unit a
+# minimal PATH that has no nvm in it. Naming the real entrypoint avoids both.
+ExecStart="__NODE__" "__REPO__/node_modules/tsx/dist/cli.mjs" --env-file=.env scripts/publish-origins.ts
 
 # The lock the supervisor takes lives in /tmp; a stale one after a hard kill is cleared by its
 # own signal-0 check, so no ExecStartPre cleanup is needed here (drill 6).

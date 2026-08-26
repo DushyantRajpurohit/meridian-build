@@ -298,3 +298,43 @@ converts a crash into a silence** — the unit never reaches `failed`, so it sit
 "failed". `verify` now treats anything other than `active` as a finding, prints the last error
 lines from the journal, and separately flags a unit whose `NRestarts` has climbed, because a
 unit that is `active` on its 206th attempt is not healthy either.
+
+### `.bin/tsx` is a shell script
+
+With the path quoted, node received it intact and failed differently:
+
+```
+node_modules/.bin/tsx:2
+basedir=$(dirname "$(echo "$0" | sed -e 's,\\,/,g')")
+SyntaxError: missing ) after argument list
+```
+
+`node_modules/.bin/<name>` is npm's shim: a `/bin/sh` script that locates node and re-execs the
+real entrypoint. Handing it to `node` makes node parse shell as JavaScript. The error names the
+right file and the right line and still misleads, because `SyntaxError` in `node_modules` reads
+as a corrupt dependency rather than as the wrong kind of file.
+
+Running the shim *directly* — `ExecStart=…/node_modules/.bin/tsx …` — is the tempting fix and
+would work when tested in a terminal, then fail as a unit: the shim needs `node` on `PATH`, and
+systemd hands a unit a minimal `PATH` with no nvm in it. The fix that works in both places is to
+name the real entrypoint, `node_modules/tsx/dist/cli.mjs`, which is what the package's own
+`bin` field points at.
+
+### The check that aborted at the thing it was checking for
+
+The `verify` rewrite above introduced its own bug in one line:
+
+```bash
+st="$(systemctl is-active "$u" 2>&1)"
+```
+
+`systemctl is-active` **exits 3** for `activating`. Under `set -euo pipefail`, a standalone
+assignment whose command substitution fails takes the exit status of that substitution, so the
+whole stage terminated at the first unhealthy unit — printing the healthy connector, then
+nothing. Silent, and indistinguishable from the output simply ending.
+
+The version it replaced was accidentally immune: the substitutions were arguments to `printf`,
+where their exit status is discarded. Making the check *better* is what exposed it to `set -e`
+for the first time. Both assignments now end in `|| true`, and the loop is tested against a
+genuinely failing unit rather than only against healthy ones — which is the actual lesson, since
+every earlier run of this stage had three healthy units and could not have caught it.
