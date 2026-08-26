@@ -74,8 +74,15 @@ resource "cloudflare_zero_trust_tunnel_cloudflared_route" "box" {
 # policy below says.
 resource "cloudflare_zero_trust_access_application" "warp_enrolment" {
   account_id = var.account_id
-  name       = "Meridian WARP enrolment"
-  type       = "warp"
+
+  # "Warp Login App", and not the descriptive name I first gave it. Cloudflare names the
+  # device-enrolment application itself and overwrites whatever is sent, so a nicer name here
+  # produced a diff that reappeared on every plan forever — configuration that cannot converge.
+  # A permanent diff is worse than a bad name: it trains you to read "2 to change" as normal,
+  # and the day a real change hides in that noise you will scroll past it. Matching the server
+  # is the fix; the comment carries the meaning the name cannot.
+  name = "Warp Login App"
+  type = "warp"
 
   policies = [
     {
@@ -119,7 +126,15 @@ resource "cloudflare_zero_trust_gateway_policy" "private_allow_operator" {
   action      = "allow"
   filters     = ["l4"]
   traffic     = "net.dst.ip in {${var.private_host_ip}}"
-  identity    = "identity.email in {\"${var.operator_email}\"}"
+
+  # lower(), because Gateway normalises the address to lowercase on the way in and returns it
+  # that way — so a capitalised address in the config never equals the one in the API, and the
+  # plan never converges. The same trap as the app name above, in a different product.
+  #
+  # Worth being clear that this is cosmetic and not a security boundary: the comparison
+  # Gateway performs is already case-insensitive, so the policy matched correctly the whole
+  # time. What was broken was my ability to trust a clean plan.
+  identity = "identity.email in {\"${lower(var.operator_email)}\"}"
 }
 
 # Precedence 2: everyone else, blocked, explicitly.

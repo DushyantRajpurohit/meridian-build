@@ -163,3 +163,29 @@ sitting on any command line where `ps` would show it (R9).
 
 What it cannot prove is R34, because R34 is a claim about a machine that has rebooted. The only
 evidence for that is the reboot itself, and it belongs in the recording.
+
+---
+
+## Two drifts the first apply left behind
+
+The apply succeeded and `terraform plan` then reported **2 to change**, every time, forever.
+Both were mine, both are the same mistake in two different products, and neither is a security
+bug — which is exactly why they are worth writing down.
+
+**Cloudflare names the device-enrolment application itself.** I called it
+`Meridian WARP enrolment`; the API stores `Warp Login App` and overwrites what is sent. So the
+config asked for one name, the server reported another, and the plan proposed the same
+correction on every run.
+
+**Gateway lowercases the identity address.** `Dushyantrajpurohit5412@gmail.com` went in and
+`dushyantrajpurohit5412@gmail.com` came back, so the string in the config never equalled the
+string in the API. The policy *matched correctly the whole time* — Gateway's own comparison is
+case-insensitive — so nothing was ever unprotected. `lower()` in the expression fixes it.
+
+**Why bother, if neither one is a vulnerability.** Because a permanent diff is a broken
+instrument. R40's claim is that a rebuild lands on a plan that says *No changes*, and that claim
+is only worth something if a plan that says anything else is alarming. Two lines of noise on
+every run trains you to read "2 to change" as normal, and the day a real change hides in that
+noise you scroll past it. The fix is to make the configuration state what the server will
+actually do — the app's real name, the address's real case — and let the comment carry the
+meaning the value no longer can.
