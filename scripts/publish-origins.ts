@@ -44,6 +44,31 @@ const children = new Map<string, ChildProcess>()
 const published = new Map<string, string>()
 let stopping = false
 
+// The last few lines each connector wrote, kept so that its exit can say WHY. The scanner
+// below reads cloudflared's output looking for a hostname and discarded everything else, so
+// 774 consecutive creation failures produced 774 identical `exited (1)` lines and not one
+// word of cause. The cause was sitting in the stream the whole time.
+const tails = new Map<string, string[]>()
+const TAIL_LINES = 6
+
+// Consecutive restarts per surface, reset the moment a hostname is announced. Used only to
+// space out retries — see backoffMs.
+const restarts = new Map<string, number>()
+
+// Cloudflare rate-limits quick-tunnel CREATION per source address, and answers 429 with an
+// HTML error page that cloudflared fails to parse:
+//
+//   ERR Error unmarshaling QuickTunnel response: error code: 1015
+//       status_code="429 Too Many Requests"
+//
+// Retrying every 3s into a rate limit is how a short throttle becomes a long one. This is not
+// hypothetical: a crash-looping unit restarted this supervisor 258 times, three tunnels a
+// restart, and earned exactly that. Treat it as its own condition with its own long wait.
+const RATE_LIMITED = /\b1015\b|429 Too Many Requests|Too Many Requests/i
+const RATE_LIMIT_WAIT_MS = 15 * 60_000
+const BACKOFF_BASE_MS = 3_000
+const BACKOFF_MAX_MS = 5 * 60_000
+
 // How often to ask whether the published hostname still answers, and how many consecutive
 // failures are needed before the connector is torn down and rebuilt.
 const PROBE_INTERVAL_MS = 60_000
@@ -81,12 +106,24 @@ function start(name: string, port: number): void {
 
   let announced = false
   const scan = (chunk: Buffer): void => {
+    const text = chunk.toString('utf8')
+
+    // Keep the tail regardless of whether a hostname was found. Diagnosis is the whole point:
+    // an exit that cannot say why is an exit you retry blindly.
+    const tail = tails.get(name) ?? []
+    for (const line of text.split('\n')) {
+      const trimmed = line.trim()
+      if (trimmed !== '') tail.push(trimmed)
+    }
+    tails.set(name, tail.slice(-TAIL_LINES))
+
     if (announced) return
-    const found = QUICK_TUNNEL_URL.exec(chunk.toString('utf8'))
+    const found = QUICK_TUNNEL_URL.exec(text)
     if (found === null) return
     announced = true
     published.set(name, found[0])
     failures.set(name, 0)
+    restarts.set(name, 0)
     void publish(name, found[0])
   }
 
@@ -97,9 +134,39 @@ function start(name: string, port: number): void {
     children.delete(name)
     published.delete(name)
     if (stopping) return
-    console.error(`[${name}] cloudflared exited (${String(code)}), restarting in 3s`)
-    setTimeout(() => start(name, port), 3_000)
+
+    const tail = tails.get(name) ?? []
+    const n = (restarts.get(name) ?? 0) + 1
+    restarts.set(name, n)
+
+    const throttled = tail.some((line) => RATE_LIMITED.test(line))
+    const wait = throttled ? jitter(RATE_LIMIT_WAIT_MS) : backoffMs(n)
+
+    console.error(`[${name}] cloudflared exited (${String(code)}), attempt ${String(n)}, retrying in ${String(Math.round(wait / 1000))}s`)
+    if (throttled) {
+      console.error(`[${name}] Cloudflare is rate-limiting quick-tunnel creation from this address (1015/429). Waiting it out rather than deepening it.`)
+    }
+    for (const line of tail) console.error(`[${name}]   ${line}`)
+
+    setTimeout(() => start(name, port), wait)
   })
+}
+
+/**
+ * Exponential with a ceiling, and jittered. The ceiling matters more than the growth: without
+ * one, a surface that has been down for an hour waits hours to try again, and the recovery
+ * nobody is watching for never happens. The jitter matters because there are three of these
+ * and they fail together — quick-tunnel leases are issued together and reaped together — so an
+ * unjittered backoff reconverges all three onto the same instant and re-creates the burst that
+ * caused the rate limit.
+ */
+function backoffMs(attempt: number): number {
+  const raw = BACKOFF_BASE_MS * 2 ** Math.min(attempt - 1, 10)
+  return jitter(Math.min(raw, BACKOFF_MAX_MS))
+}
+
+function jitter(ms: number): number {
+  return Math.round(ms * (0.75 + Math.random() * 0.5))
 }
 
 /**

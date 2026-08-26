@@ -423,3 +423,63 @@ genuinely dropped for about four minutes: four rounds of
 then did it start counting. `admin` and `partner` recovered at 1/3 and reset; `public` reached
 3/3 and was rebuilt alone. That is the discriminator doing exactly the job it was added for, on
 real traffic, within an hour of being written.
+
+## Drill 7 (unplanned) — I rate-limited myself, and could not see it
+
+**Symptom.** `meridian-clinic.pages.dev` returning 502 on every request while
+`staff.` and `api.` were fine at 302 and 403. `verify` reported all three units `active`.
+
+**What the log said**, several hundred times:
+
+```
+[public] cloudflared exited (1), restarting in 3s
+[partner] https://now-choose-elderly-recommendation.trycloudflare.com → origin:partner
+[admin] cloudflared exited (1), restarting in 3s
+```
+
+A new hostname every few seconds, published to KV, dead before the Function could use it.
+
+**What the log did not say: why.** `exited (1)` and nothing else, because the scanner read
+cloudflared's output looking for a hostname pattern and dropped every line that did not match.
+The cause was in that stream the whole time and was thrown away on arrival. Running the same
+command by hand took ten seconds and produced it immediately:
+
+```
+ERR Error unmarshaling QuickTunnel response: error code: 1015
+    status_code="429 Too Many Requests"
+```
+
+**Cause, and it is mine.** Cloudflare rate-limits quick-tunnel *creation* per source address.
+The preceding hour's unit bugs — a Node 18 interpreter, a repo path split on its space, npm's
+shell shim handed to node — left `meridian-origins` crash-looping under `Restart=always` for
+**258 restarts**, and each restart spawns three tunnels. Roughly 770 creation requests. The
+throttle was earned.
+
+Then the supervisor's own fixed 3-second retry kept hammering the endpoint that was refusing
+it, which is how a short throttle becomes a long one.
+
+**Three things were wrong, and only one of them was the rate limit.**
+
+1. *A supervisor that discards the output it does not recognise.* Filtering a stream for the
+   one pattern you want is the natural way to write the scanner and it destroys every failure
+   you did not anticipate. It now keeps a six-line tail per connector regardless of match, and
+   prints it on exit. Cost: six lines per failure. Value: the diagnosis, for free, in the place
+   you already look.
+2. *A fixed retry interval.* Now exponential from 3s to a 5-minute ceiling — the ceiling
+   matters more than the growth, because an unbounded backoff means a surface down for an hour
+   never retries and the recovery nobody is watching for never happens. Jittered, because the
+   three fail *together* (leases are issued and reaped together) and an unjittered backoff
+   reconverges all three on the same instant, recreating the burst that caused the throttle.
+3. *No notion of "the remote is refusing me on purpose".* 429/1015 is now its own condition
+   with its own 15-minute wait, logged in words rather than left as another `exited (1)`.
+
+**The general shape.** Every one of the four bugs in this cascade was individually small and
+each was hidden by the layer above it: `Restart=always` turned a crash into `activating` rather
+than `failed`; `activating` was printed by a check that did not judge it; the supervisor turned
+an explained failure into an unexplained one. Recovery machinery converts loud failures into
+quiet ones, which is what it is for — and the price is that every layer of it has to report
+what it absorbed. None of mine did.
+
+**Recovery.** Nothing to fix at Cloudflare; the throttle expires. Stop the supervisor, wait,
+start it. With the backoff in place it now waits the throttle out on its own instead of
+extending it.
