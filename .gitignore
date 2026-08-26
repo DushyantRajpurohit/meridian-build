@@ -6,3 +6,7 @@ node_modules/
 .terraform/
 .wrangler/
 forged-keys.json
+
+# Generated from pages/wrangler.template.toml by scripts/render-wrangler.sh — the KV id is
+# written in at deploy time so a destroy/apply cycle (R40) cannot leave a stale one committed.
+pages/wrangler.toml

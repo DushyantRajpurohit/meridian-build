@@ -12,8 +12,8 @@
     "lint": "oxlint -c .oxlintrc.json src scripts test",
     "typecheck": "tsc -p tsconfig.json && tsc -p pages/tsconfig.json",
     "test": "vitest run",
-    "deploy": "wrangler pages deploy pages/public --project-name meridian-clinic",
-    "edge:dev": "wrangler pages dev pages/public"
+    "pages:deploy": "./scripts/render-wrangler.sh && cd pages && ../node_modules/.bin/wrangler pages deploy",
+    "pages:dev": "./scripts/render-wrangler.sh && cd pages && ../node_modules/.bin/wrangler pages dev"
   },
   "dependencies": {
     "express": "4.22.2",
