@@ -41,8 +41,11 @@ resource "cloudflare_zero_trust_access_policy" "block_former_staff" {
   name       = "meridian-block-former-staff"
   decision   = "deny"
 
+  # sorted for the same reason the Turnstile domains are — see that resource. Order carries no
+  # meaning inside a policy's include list (any match decides it), so normalising it costs
+  # nothing and keeps the plan clean.
   include = [
-    for email in var.blocked_emails : { email = { email = email } }
+    for email in sort(var.blocked_emails) : { email = { email = email } }
   ]
 }
 
@@ -53,7 +56,7 @@ resource "cloudflare_zero_trust_access_policy" "allow_staff" {
   decision   = "allow"
 
   include = [
-    for email in var.staff_emails : { email = { email = email } }
+    for email in sort(var.staff_emails) : { email = { email = email } }
   ]
 }
 
