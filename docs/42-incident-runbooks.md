@@ -324,3 +324,65 @@ Nothing here crashed, nothing was misconfigured, and the system still went dark 
 schedule while I was not looking. A named tunnel under systemd has a stable hostname and
 `Restart=always`; this has neither, and the ledger in the README says so. This incident is the
 evidence for that claim rather than an embarrassment to be tidied out of it.
+
+## 6 — The same failure again, and the guard that let it happen
+
+Checking the surfaces one last time before submission: canonical `502`, `staff.` `302`, `api.`
+`403`. The 502 is *our own* bad gateway — `{"error":"bad_gateway","surface":"admin"}` — not a
+raw 530, so the Function's drill-5 fix was working: it had recognised the dead origin, dropped
+the cached URL, retried, found nothing live, and said so in its own words. The bug fixed in
+drill 5 was fixed. The system was still down.
+
+### Triage, in order
+
+1. **Origin?** `ss -ltn` — 3000, 3001, 3002 all listening on `127.0.0.1`. Alive, and still
+   correctly invisible off loopback.
+2. **KV?** All three keys present, pointing at three `trycloudflare.com` hostnames.
+3. **Those hostnames?** `curl` returned `000` on all three. Not a status — DNS. Reaped again.
+4. **The supervisor?** `ps` showed **two** of them, five hours and four hours old, with **six**
+   `cloudflared` processes between them.
+
+### Two faults, and the second one is mine twice over
+
+**Two supervisors were publishing to the same three KV keys.** I started a second one at some
+point and never noticed, because nothing stops you. They race: the Function follows whichever
+wrote last, and the losing three connectors keep running perfectly, serving a URL nothing points
+at. From outside it is indistinguishable from a flaky tunnel. `scripts/publish-origins.ts` now
+takes an exclusive lock at `/tmp/meridian-publish-origins.lock`, checks the pid inside it with
+signal 0 so a `SIGKILL`ed predecessor does not wedge it forever, and exits 3 rather than start a
+second. Verified: the second invocation prints the owner's pid and refuses.
+
+**The guard I added in drill 5 is what kept the system dark.** That guard said: if *every*
+surface fails in the same round, assume this box's uplink dropped and do not rotate. The
+reasoning was that three independent tunnels do not die in the same instant.
+
+They are not independent. Quick-tunnel leases are handed out together and expire together, so
+all three dying at once is the **expected** failure on this path, not the anomaly — and I had
+written the one condition that describes it into an exemption. The supervisor sat through the
+reap logging `local network fault` while nothing whatsoever was wrong with the network. A guard
+against false positives, aimed at the true positive.
+
+The fix is to stop inferring and go ask. On a total failure the probe now hits a control URL
+that is not ours (`https://cloudflare.com/cdn-cgi/trace`). If that fails too the box really is
+offline and rotating would achieve nothing; if it answers, our hostnames are gone and the
+correlation is evidence rather than a reason to wait. The anti-flap threshold still applies, so
+a confirmed reap costs up to three probe rounds before the rebuild — three minutes of automated
+recovery against an outage that otherwise lasts until a human looks.
+
+### Recovery, with a clock
+
+Teardown of both supervisors and all six connectors, then one clean start: **90 seconds** from
+kill to all three surfaces verified `200 / 302 / 403`, including a 25-second settle for the
+connectors to register and the second-supervisor lock test. The deciding check passes at the
+unprotected canonical hostname: `/admin` → `403 no_token`. The reviewer's service token returns
+the results payload from `api.` and is still refused at `staff.` with a 302.
+
+PIDs were collected into a variable from `ps` and filtered against `$$` before any `kill` — the
+third encounter with that trap, and the first time it did not cost me a shell.
+
+### What it changes about the ledger
+
+Drill 5's conclusion was that a quick tunnel is not a deployment. Drill 6 is the same conclusion
+with a sharper edge: I had already written the fix, the fix worked, and the system went down
+again anyway from a second cause the fix had introduced. This is what R8's systemd requirement
+buys — not a smarter supervisor, but one fewer supervisor to be clever about.

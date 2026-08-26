@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process'
+import { closeSync, openSync, readFileSync, unlinkSync, writeSync } from 'node:fs'
 
 /**
  * §11 nominates this as the operations exercise, and it is a fair one: a quick tunnel's
@@ -42,6 +43,17 @@ const PROBE_INTERVAL_MS = 60_000
 const PROBE_TIMEOUT_MS = 15_000
 const FAILURES_BEFORE_RESTART = 3
 const failures = new Map<string, number>()
+
+// A URL that answers whenever this box has working DNS and egress, and is not one of ours.
+// Its only job is to tell "this box is offline" apart from "every lease was reaped at once".
+const UPLINK_PROBE_URL = 'https://cloudflare.com/cdn-cgi/trace'
+
+// Exactly one supervisor may own these three surfaces. Two of them publish to the same three
+// KV keys, so the Function follows whichever wrote last while six connectors run and the
+// other three hostnames are orphaned — live processes serving a URL nothing points at. I ran
+// two by accident and it looked, from outside, exactly like a flaky tunnel.
+const LOCK_PATH = '/tmp/meridian-publish-origins.lock'
+acquireLock()
 
 for (const surface of SURFACES) start(surface.name, surface.port)
 
@@ -117,20 +129,29 @@ async function probeAll(): Promise<void> {
     })),
   )
 
-  // If EVERY surface fails in the same round, the fault is almost certainly this box's uplink
-  // rather than three independent tunnels dying at the same instant. Rotating all three
-  // hostnames because the hotspot dropped for ten seconds would turn a blip into a real
-  // outage: every rotation costs the Function a cold KV read and the visitor a failed
-  // request. So a total failure is logged and waited out, and only a partial one is acted on.
+  // When EVERY surface fails in the same round there are two very different causes, and the
+  // first version of this guard assumed the wrong one. It read a total failure as this box's
+  // uplink dropping and waited it out, because rotating three hostnames over a ten-second
+  // hotspot blip turns a blip into a real outage.
   //
-  // I know this matters because the first version rebuilt a healthy tunnel. It probed with a
-  // 10s timeout and never consumed the response bodies, which in Node keeps the socket busy
-  // and made later probes on the same host time out — the supervisor's own leak looked
-  // exactly like a dead tunnel. Both are fixed below; the all-or-nothing guard stays because
-  // it is the difference between a probe that heals and a probe that flaps.
+  // But quick-tunnel leases are handed out together and expire together, so all three dying
+  // at the same instant is the EXPECTED failure on this path, not the anomaly — and the guard
+  // written to prevent flapping is precisely what let the system stay dark. It sat through
+  // the reap logging "local network fault" while nothing was wrong with the network.
+  //
+  // So ask something that is not ours. If the control probe fails too, the box is offline and
+  // rotating would accomplish nothing anyway. If it answers, our hostnames are gone and the
+  // correlation is evidence rather than a reason to wait.
+  //
+  // (The earlier bug here was different and is fixed in `answers`: the first version probed
+  // without consuming response bodies, which in Node keeps the socket checked out, so later
+  // probes timed out and the supervisor diagnosed its own leak as a dead tunnel.)
   if (results.every((result) => !result.ok)) {
-    console.error(`[probe] all ${String(live.length)} surfaces unreachable — treating as a local network fault, not rotating`)
-    return
+    if (!(await answers(UPLINK_PROBE_URL))) {
+      console.error(`[probe] all ${String(live.length)} surfaces unreachable and the control probe failed too — this box is offline, not rotating`)
+      return
+    }
+    console.error(`[probe] all ${String(live.length)} surfaces unreachable while the uplink is fine — the leases were reaped together`)
   }
 
   for (const { surface, ok } of results) {
@@ -188,7 +209,63 @@ function shutdown(): void {
   stopping = true
   clearInterval(probeTimer)
   for (const child of children.values()) child.kill('SIGTERM')
+  releaseLock()
   process.exit(0)
+}
+
+function acquireLock(): void {
+  // Two passes: the second one only runs after a stale lock has been cleared.
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const fd = openSync(LOCK_PATH, 'wx')
+      writeSync(fd, String(process.pid))
+      closeSync(fd)
+      return
+    } catch {
+      // The lock exists. It is only meaningful if the process named in it is still running —
+      // a supervisor killed with SIGKILL leaves the file behind, and refusing to start for a
+      // pid that died a week ago would be worse than the race it prevents.
+      let owner = 0
+      try {
+        owner = Number(readFileSync(LOCK_PATH, 'utf8').trim())
+      } catch {
+        continue
+      }
+      if (Number.isInteger(owner) && owner > 0 && running(owner)) {
+        console.error(`publish-origins: pid ${String(owner)} is already supervising these tunnels (${LOCK_PATH}) — refusing to start a second one`)
+        process.exit(3)
+      }
+      console.error(`publish-origins: clearing a stale lock from pid ${String(owner)}`)
+      try {
+        unlinkSync(LOCK_PATH)
+      } catch {
+        // Someone else cleared it first; the next pass will take it or lose fairly.
+      }
+    }
+  }
+  console.error('publish-origins: could not take the lock')
+  process.exit(3)
+}
+
+function releaseLock(): void {
+  try {
+    // Only ours. If a stale-lock sweep handed ownership to someone else while we were
+    // running, deleting their lock would re-open the exact race the lock exists to close.
+    if (readFileSync(LOCK_PATH, 'utf8').trim() === String(process.pid)) unlinkSync(LOCK_PATH)
+  } catch {
+    // Already gone.
+  }
+}
+
+function running(pid: number): boolean {
+  try {
+    // Signal 0 checks for existence without delivering anything. EPERM means it exists and
+    // belongs to another user, which still counts as running.
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM'
+  }
 }
 
 function requireEnv(name: string): string {

@@ -8,13 +8,13 @@ Cloudflare Access is a filter, not the enforcement point.
 
 That is forced, not stylistic. A Pages project answers on its canonical `pages.dev` hostname
 whether or not I bind an Access application to anything (R16), so a public URL reaches my code
-with no Access in front of it, permanently. That is the ordinary condition of any reachable
-origin — the tunnel URL is the same problem in a different costume.
+with no Access in front of it, permanently — the ordinary condition of any reachable origin, and
+the tunnel URL is the same problem in a different costume.
 
 So the origin verifies the Access JWT itself, on every request, on every hostname: fetch the
 team JWKS, check `kid`, verify RS256, pin `aud` to that one application, check `iss`, `exp` and
 `nbf`, then decide whether the principal kind is allowed on that route. Forty lines of `jose`
-primitives, no all-in-one verifier (GR6). Eight refusal reasons, each returned as a code, because
+primitives, no all-in-one verifier (GR6). Eight refusal reasons, each returned as a code:
 a runbook that cannot tell `wrong_audience` from `unknown_key` sends you to the wrong layer.
 
 The three deciding tests pass at the *unprotected* canonical hostname, the only place passing
@@ -22,9 +22,9 @@ them means anything: no token → `403 no_token`; partner token at the staff con
 `403 wrong_audience`; forged signature with a real `kid` → `403 bad_signature`.
 
 A second gate sits behind it: the Function signs each request onto the tunnel with HMAC-SHA256
-over the raw body plus a nonce and timestamp, and the origin refuses anything arriving at the
-tunnel URL unsigned (`403 edge_nonce_missing`). Reaching the application unauthenticated takes
-two independent failures.
+over the raw body plus a nonce and timestamp, and the origin refuses anything unsigned at the
+tunnel URL (`403 edge_nonce_missing`). Reaching the application unauthenticated takes two
+independent failures.
 
 ## Threat model, condensed
 
@@ -43,10 +43,10 @@ are deleted on arrival before anything reads them. Cross-audience replay — a r
 signed, unexpired token from the same team is still the wrong token. Password attacks, by not
 having passwords.
 
-**What it does not stop, which is the half that matters.** A stolen live session on an unlocked
+**What it does not stop, the half that matters.** A stolen live session on an unlocked
 workstation is full staff access until it expires; the mitigation is a session length, not a
-control. With one-time PIN the inbox *is* the identity — no second factor, and Access cannot
-distinguish a compromised mailbox from a legitimate one. The service token is a bearer
+control. With one-time PIN the inbox *is* the identity — no second factor, and a compromised
+mailbox is indistinguishable from a legitimate one. The service token is a bearer
 credential with no proof of possession. An authorised user exporting everything on their last
 morning looks like one doing their job. Anyone with the API token can rewrite the posture, and
 Terraform makes that faster, not slower. Every check here answers "who is this?" and none
@@ -58,36 +58,32 @@ path to the origin, not the origin.
 
 - **Drill 1, staff leaver** — revoke *and* terminate the session: **67s.**
 - **Drill 2, leaked service token** — rotate: **96s against a 60s target. Missed.**
-- **Drill 4, staff console down** — five-step triage: **3s to diagnose, 14s to recover.**
+- **Drill 4, staff console down** — five-step triage, steps 4 and 5 never reached because the
+  ordering meant I never opened a policy page: **3s to diagnose, 14s to recover.** Small
+  because the fault was; it establishes ordering, not duration.
 - **Drill 5, unplanned** — the tunnels died on their own: **~90s to diagnose, 53s to recover.**
-- **Drill 3, tunnel token leaks** — n/a on this path.
+- **Drill 6, unplanned** — they died again, for a second reason: **90s to recover.**
+- **Drill 3, tunnel token leaks** — n/a here.
 
-Drill 4 ran with the origin killed deliberately: the edge was fine, the connectors alive, no
-listener on 3000–3002. Steps 4 and 5 were never reached — the runbook working, because the fault
-was infrastructure and the ordering meant I never opened a policy page. The number is small
-because the fault was; the drill establishes ordering, not duration.
+Drills 5 and 6 were not drills. Both times the hostnames had been reaped at Cloudflare's end
+while all three `cloudflared` processes still ran, and `curl` returning `000` rather than a
+status was the tell: that is DNS failing. A live connector is not a live tunnel. Nothing crashed
+either time — the system went dark on its own schedule, which is exactly why R8 asks for a
+managed service.
 
-Drill 5 was not a drill. Checking the URLs before submission, the public hostname returned 530
-while the Access-bound two still gave 302 and 403 — they never reach the origin, so only the
-public one could show it. The three `cloudflared` processes were **still running**: the quick
-tunnel hostnames had been reaped at Cloudflare's end, and `curl` returning `000` rather than a
-status was the tell, because that is DNS failing. A live connector process is not a live tunnel.
-Nothing crashed — the system went dark on its own schedule while I was not looking, which is
-exactly why R8 asks for a managed service.
-
-**Drill 1 taught me a step missing from my own runbook.** The staff allowlist exists in two
-places — Access, and the origin's `STAFF_EMAILS`. Editing only the Terraform side leaves the
+**Drill 1 taught me a step missing from my own runbook.** The staff allowlist lives in two
+places — Access, and the origin's `STAFF_EMAILS` — so editing only the Terraform side leaves the
 origin willing to serve the leaver on the unbound canonical hostname, the exact path this build
-defends. Worse, the lists had already drifted: Access allowed six, the origin allowed one.
+defends. The lists had already drifted: Access allowed six, the origin one.
 
 **Drill 2 missed its own target, and that is the more useful result.** Steps 1–3 cost zero
 downtime exactly as the create/distribute/revoke ordering predicts — both credentials returned
 200 simultaneously. Then Terraform planned the token delete *before* the policy update that
-released it, Cloudflare refused with `400 code 12139`, and recovery took two targeted applies:
-35 seconds I had not budgeted because I had never run it. The runbook now says step 4 is two
-applies, not one. The miss cost nothing real — the partner was already migrated, so 96 seconds
-revoked a credential nobody legitimate was using. Reverse the ordering and they are 96 seconds
-of a lab unable to deliver results.
+released it, Cloudflare refused with `400 code 12139`, and recovery took two targeted applies —
+35 seconds I had never budgeted because I had never run it. Step 4 is two applies, not one. The
+miss cost nothing real: the partner was already migrated, so 96 seconds revoked a credential
+nobody legitimate was using. Reverse the ordering and they are 96 seconds of a lab unable to
+deliver results.
 
 ## What I got wrong, and what it cost
 
@@ -95,43 +91,48 @@ of a lab unable to deliver results.
 for about twenty minutes and **the user found it, not me.** `.env.example` had no Turnstile
 entry, so writing `.env` I invented a name — `TURNSTILE_SITEKEY` — while the code read
 `TURNSTILE_SITE_KEY`. A `?? ''` default meant the page rendered fine with an empty sitekey and
-failed only at submission. Two lessons: a fallback on a *required* value turns a startup failure
-into a runtime one, and an incomplete `.env.example` is a bug waiting for someone to guess. The
-sitekey is now required config.
+failed only at submission: a fallback on a *required* value turns a startup failure into a
+runtime one, and an incomplete `.env.example` is a bug waiting for someone to guess. The sitekey
+is now required config.
 
 **`error code: 1101` on every request after the first deploy.** Tailing the deployment showed
 `DataError: Imported HMAC key length (0)`. Pages binds secrets at *deploy* time; I had set
 `EDGE_HMAC_SECRET` afterwards, so the code held an empty key. Cost: most of the first live hour,
 and far more without the tail — the symptom names no layer at all.
 
-**The repo did not install for anyone but me.** The workspace catalog and two shared configs
-lived in the parent directory: `ERR_PNPM_CATALOG_ENTRY_NOT_FOUND_FOR_SPEC` on a clean clone.
-Found only because I cloned to a scratch path and ran install.
-
 **The worst bug in the build, found by drill 5 and not by me.** The Function caches each
 origin URL per isolate and drops it when the origin stops answering — except a dead quick tunnel
 **does not throw** inside a Worker. Cloudflare answers the subrequest itself with 530, so
 `fetch` resolves, the retry path never ran, and an isolate holding a stale URL served that 530
-for the rest of its life. That is why the hostname alternated 200/530 by isolate. My retry was
-correct and unreachable, which is the most expensive kind of wrong. Both the Function and the
-supervisor's probe now key on the right signal: *any* HTTP status is healthy, because a 403 from
-the origin means the whole path worked.
+for its whole life. That is why the hostname alternated 200/530 by isolate. My retry was
+correct and unreachable, which is the most expensive kind of wrong. The Function now treats 530
+as unreachable, which is safe because the origin cannot produce one.
+
+**The fix that caused the next outage.** Drill 5's repair added a guard: if *every* surface
+fails in one probe round, assume the uplink dropped and do not rotate, because three independent
+tunnels do not die in the same instant. They are not independent — quick-tunnel leases are issued
+together and expire together, so I had written the true positive into an exemption, and the
+supervisor sat through a second reap logging `local network fault` with nothing wrong with the
+network. It now asks a control URL that is not mine before concluding anything. Drill 6 also
+found **two** supervisors racing on the same KV keys, half the connectors serving a URL nothing
+pointed at. There is a lock now.
 
 **An overclaim I retracted.** I described R28 — a service principal refused on a human route —
-as demonstrable in production. It is not: Access refuses the token at the edge with a 302, so
-the origin's check never fires. It is proven in the test suite, where the harness mints a token
-for the console's own audience so `aud` cannot be what refuses it. The check is real; my account
-of where you can watch it was wrong.
+as demonstrable in production. It is not: Access refuses the token at the edge with a 302, so the
+origin's check never fires. It is proven in the tests, where the harness mints a token for the
+console's own audience so `aud` cannot be what refuses it. The check is real; my account of where
+you can watch it was wrong.
 
 **Of the seven listed traps, none bit me** — R14's ordering, R21's header, R22's `aud` and
-R29's per-IP counter were designed for from the start. What cost time was operational: a
-variable name, deploy-time secret binding, a repo that only worked on the machine that wrote it,
-and an error path that could not be reached. Roughly where real incidents come from, too.
+R29's per-IP counter were designed for from the start. What cost time was operational: a variable
+name, deploy-time secret binding, a repo that only installed on the machine that wrote it
+(`ERR_PNPM_CATALOG_ENTRY_NOT_FOUND_FOR_SPEC` on a clean clone), and two error paths that could
+not be reached. Roughly where real incidents come from, too.
 
 ## Not done, and why
 
 §7 (SSH and WARP through Access, 7 points) and the firewall half of R6 need root on this box.
-R8's connector is script-supervised, not a systemd unit — drill 5 is what that costs. R40 is
-done: 12 resources destroyed and rebuilt in 291s with no dashboard click, and six
-Cloudflare-issued identifiers changed underneath, which is the part that actually makes a
-rebuild hard. Each remaining gap is named where it is missing rather than described as done.
+R8's connector is script-supervised, not a systemd unit — drills 5 and 6 are what that costs.
+R40 is done: 12 resources destroyed and rebuilt in 291s with no dashboard click, six
+Cloudflare-issued identifiers changing underneath, which is the part that makes a rebuild hard.
+Each gap is named where it is missing rather than described as done.

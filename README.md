@@ -373,16 +373,18 @@ Honest ledger of what is still outstanding:
   SSH through Access, the LAN-rule deletion and reboot, and WARP enrolment are all ahead.
 - **R6's firewall half.** No non-loopback listener exists and every surface binds `127.0.0.1`,
   but `ufw default deny incoming` needs root and has not been set.
-- **R42: all four runnable drills are performed and timed.** 1 (leaver) 67s; 2 (token
-  rotation) **96s against a 60s target — missed**, for reasons written up rather than smoothed
-  over; 4 (console down) 3s to diagnose and 14s to recover; 5 (unplanned, the tunnels died on
-  their own) ~90s and 53s. R41's audit-log pull is done. Drill 3 has no counterpart on this
+- **R42: all four runnable drills are performed and timed, plus two unplanned ones.** 1
+  (leaver) 67s; 2 (token rotation) **96s against a 60s target — missed**, for reasons written up
+  rather than smoothed over; 4 (console down) 3s to diagnose and 14s to recover; 5 (unplanned,
+  the tunnels died on their own) ~90s and 53s; 6 (unplanned, they died again for a different
+  reason) 90s to recover. R41's audit-log pull is done. Drill 3 has no counterpart on this
   path — a quick tunnel has no token to leak.
 - **R8** needs a named tunnel with a systemd unit; the three quick tunnels here are supervised
   by a script and do not survive a reboot unattended. The supervisor now probes each published
-  hostname every 60s and rebuilds a connector whose hostname has been reaped — see drill 5,
-  the incident that proved it was needed — but a probe is not `Restart=always`, and nothing
-  here starts at boot.
+  hostname every 60s and rebuilds a connector whose hostname has been reaped, takes an exclusive
+  lock so a second supervisor cannot race it on the same KV keys, and asks a control URL before
+  writing a total failure off as a local outage — drills 5 and 6 are the incidents that proved
+  each of those needed — but a probe is not `Restart=always`, and nothing here starts at boot.
 - **The reviewer's test identity and the recording** are outstanding.
 
 The staff Allow list is six Gmail plus-addresses that all deliver to one inbox. That proves the

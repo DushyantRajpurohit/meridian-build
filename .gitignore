@@ -13,3 +13,6 @@ pages/wrangler.toml
 
 # Reviewer handout (deliverable 3) — service token credentials, never committed.
 reviewer-credentials.txt
+
+# Supervisor logs — runtime output, not source.
+logs/
