@@ -186,6 +186,20 @@ What still cannot be covered locally: §2, §7, §8 and §9 all need an account.
 - **R10 is not available on this path.** A quick tunnel has no credentials file and no ingress
   table, so two connectors cannot serve one tunnel. That is a real cost of the free route.
 
+## Written answers
+
+Several requirements ask for an explanation rather than a running system, and on the no-domain
+path (§11) a few more become written answers because there is no zone to configure. They live
+in `docs/` rather than inline here, so this README stays a thing a reviewer can walk top to
+bottom.
+
+| Document | Covers |
+|---|---|
+| [`docs/01-edge-and-transport.md`](docs/01-edge-and-transport.md) | R1–R5. What Flexible TLS actually does to the connection; the HSTS-preload-and-lose-the-domain question; `/cdn-cgi/trace` in triage; whether the origin IP was ever published, and the production remedy when the answer is yes |
+| [`docs/02-connectivity.md`](docs/02-connectivity.md) | R6–R11. Why a missing ingress catch-all stops `cloudflared` from starting rather than producing a 404; credentials file vs connector token and which is worse to leak; 1033 vs 1016 vs origin 502, and what each accuses |
+| [`docs/42-incident-runbooks.md`](docs/42-incident-runbooks.md) | R42. Four procedures, written before being timed. Timings unfilled until run live |
+| [`docs/43-threat-model.md`](docs/43-threat-model.md) | R43. Assets, actors, what this stops — and the longer list of what it does not |
+
 ## Infrastructure as code (§8)
 
 Terraform 1.15.9, Cloudflare provider 5.24.0. `terraform validate` passes and `terraform plan`
