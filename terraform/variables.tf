@@ -63,3 +63,15 @@ variable "turnstile_domains" {
   type        = list(string)
   default     = ["meridian-clinic.pages.dev", "localhost"]
 }
+
+variable "partner_session_duration" {
+  description = <<-EOT
+    The partner application admits service tokens only, so no browser session is ever
+    established here and this value governs nothing in practice. It is set anyway, at the
+    provider's own default, so that the value is mine rather than inherited — a default that
+    changes in a future provider release should show up as a diff in a plan, not as a silent
+    change to a security control.
+  EOT
+  type        = string
+  default     = "24h"
+}

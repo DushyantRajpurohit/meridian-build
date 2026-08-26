@@ -104,6 +104,13 @@ resource "cloudflare_zero_trust_access_application" "partner" {
   type       = "self_hosted"
   domain     = var.partner_hostname
 
+  # Pinned rather than left to the provider's 24h default. R15 asks for a deliberate choice and
+  # "whatever the provider picked" is not one, even where the value is close to inert: this
+  # application admits only service tokens, and a service token's life is governed by its own
+  # duration (8760h) rather than by a browser session that never exists here. Stating it
+  # explicitly means a future provider-default change cannot alter my infrastructure silently.
+  session_duration = var.partner_session_duration
+
   # R28 — the staff Allow is deliberately NOT attached here, and the service-auth policy is
   # deliberately not attached to the console. The two applications also carry different AUD
   # tags, which is the check the origin actually enforces (R22).
@@ -144,5 +151,11 @@ resource "cloudflare_turnstile_widget" "public_form" {
   account_id = var.account_id
   name       = "meridian-public-form"
   mode       = "managed"
-  domains    = var.turnstile_domains
+
+  # sort() is not cosmetic. Cloudflare returns this list sorted, Terraform compares lists by
+  # position, and an unsorted config therefore produces a diff on every single plan — for a
+  # resource nobody has touched. A plan that is never clean is a plan people stop reading, and
+  # R40's "destroy then apply rebuilds it" claim is only believable if the steady state is
+  # genuinely zero changes. Found by running plan again after the first apply.
+  domains = sort(var.turnstile_domains)
 }
