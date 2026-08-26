@@ -69,18 +69,21 @@ bypassable by anyone who learns the quick-tunnel URL — the origin has no other
 ## Proving it (GR5)
 
 The enforcement path has a regression suite rather than a screenshot, and it needs no
-Cloudflare account — the harness mints its own tokens against a local key pair.
+Cloudflare account — the harness mints its own tokens against a local key pair. Everything
+below runs from a clean clone of this repository:
 
 ```bash
-pnpm --filter assignment-3-meridian-build test          # 38 tests: R17–R24, R26–R32
-pnpm --filter assignment-3-meridian-build typecheck
-pnpm --filter assignment-3-meridian-build lint
+nvm use            # Node 24, per .nvmrc — wrangler needs >= 22
+pnpm install
+pnpm test          # 38 tests: R17–R24, R26–R32
+pnpm typecheck
+pnpm lint
 ```
 
 R22, both outputs, reproducible by a reviewer with no access to our team:
 
 ```bash
-pnpm --filter assignment-3-meridian-build exec tsx scripts/cross-audience.ts
+pnpm exec tsx scripts/cross-audience.ts
 ```
 
 A local dress rehearsal of the assignment's own acceptance suite — the real apps on the real
@@ -88,8 +91,8 @@ ports, the real `JwksCache` fetching over real HTTP from a JWKS served on loopba
 over real sockets. The only fakes are the things Cloudflare would issue:
 
 ```bash
-pnpm --filter assignment-3-meridian-build rehearse            # 16 checks
-pnpm --filter assignment-3-meridian-build rehearse -- --serve # leave it up and curl by hand
+pnpm rehearse            # 16 checks
+pnpm rehearse -- --serve # leave it up and curl by hand
 ```
 
 ```
