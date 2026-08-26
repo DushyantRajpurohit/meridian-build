@@ -46,32 +46,26 @@ having passwords.
 **What it does not stop, which is the half that matters.** A stolen live session on an unlocked
 workstation is full staff access until it expires; the mitigation is a session length, not a
 control. With one-time PIN the inbox *is* the identity — no second factor, and Access cannot
-distinguish a compromised mailbox from a legitimate one because there is no difference to tell.
-The service token is a bearer credential with no proof of possession. An authorised user
-exporting everything on their last morning looks like one doing their job. Anyone with the API
-token can rewrite the posture, and Terraform makes that faster, not slower. Every check here
-answers "who is this?" and none answers "should this request be allowed?" — a validly
-authenticated partner posting a hostile lab result is inside every control here. And if the box
-is compromised, Zero Trust protected the path to the origin, not the origin.
-
-One more, observed rather than theorised: KV rate-limit counters are eventually consistent. I
-predicted that in writing, then watched request 8 get through after 6 and 7 were correctly 429'd.
+distinguish a compromised mailbox from a legitimate one. The service token is a bearer
+credential with no proof of possession. An authorised user exporting everything on their last
+morning looks like one doing their job. Anyone with the API token can rewrite the posture, and
+Terraform makes that faster, not slower. Every check here answers "who is this?" and none
+answers "should this request be allowed?" — a validly authenticated partner posting a hostile
+lab result is inside every control here. And if the box is compromised, Zero Trust protected the
+path to the origin, not the origin.
 
 ## Incident timings
 
+- **Drill 1, staff leaver** — revoke *and* terminate the session: **67s.**
+- **Drill 2, leaked service token** — rotate: **96s against a 60s target. Missed.**
 - **Drill 4, staff console down** — five-step triage: **3s to diagnose, 14s to recover.**
 - **Drill 5, unplanned** — the tunnels died on their own: **~90s to diagnose, 53s to recover.**
-- **Drill 1, staff leaver** — revoke *and* terminate the session: blocked on `terraform apply`.
-- **Drill 2, leaked service token** — rotate under 60s: blocked on `terraform apply`.
 - **Drill 3, tunnel token leaks** — n/a on this path.
 
-Drill 4 ran against the live system with the origin killed deliberately. Step 1 (edge) showed
-`colo=BOM`; step 2, the connectors alive; step 3, no listener on 3000–3002. Steps 4 and 5 were
-never reached — the runbook working, because the fault was infrastructure and the ordering meant
-I never opened a policy page.
-
-**That number is small because the fault was** — I killed a process on a box I was already
-logged into. The drill establishes the ordering, not the duration.
+Drill 4 ran with the origin killed deliberately: the edge was fine, the connectors alive, no
+listener on 3000–3002. Steps 4 and 5 were never reached — the runbook working, because the fault
+was infrastructure and the ordering meant I never opened a policy page. The number is small
+because the fault was; the drill establishes ordering, not duration.
 
 Drill 5 was not a drill. Checking the URLs before submission, the public hostname returned 530
 while the Access-bound two still gave 302 and 403 — they never reach the origin, so only the
@@ -81,9 +75,19 @@ status was the tell, because that is DNS failing. A live connector process is no
 Nothing crashed — the system went dark on its own schedule while I was not looking, which is
 exactly why R8 asks for a managed service.
 
-Drills 1 and 2 are written and ordered — 2's trick is create/distribute/revoke, so the
-sixty-second clock covers only the final revoke — but they are untimed, because they need an
-apply I could not run. I will not claim a number I did not measure.
+**Drill 1 taught me a step missing from my own runbook.** The staff allowlist exists in two
+places — Access, and the origin's `STAFF_EMAILS`. Editing only the Terraform side leaves the
+origin willing to serve the leaver on the unbound canonical hostname, the exact path this build
+defends. Worse, the lists had already drifted: Access allowed six, the origin allowed one.
+
+**Drill 2 missed its own target, and that is the more useful result.** Steps 1–3 cost zero
+downtime exactly as the create/distribute/revoke ordering predicts — both credentials returned
+200 simultaneously. Then Terraform planned the token delete *before* the policy update that
+released it, Cloudflare refused with `400 code 12139`, and recovery took two targeted applies:
+35 seconds I had not budgeted because I had never run it. The runbook now says step 4 is two
+applies, not one. The miss cost nothing real — the partner was already migrated, so 96 seconds
+revoked a credential nobody legitimate was using. Reverse the ordering and they are 96 seconds
+of a lab unable to deliver results.
 
 ## What I got wrong, and what it cost
 
@@ -102,8 +106,7 @@ and far more without the tail — the symptom names no layer at all.
 
 **The repo did not install for anyone but me.** The workspace catalog and two shared configs
 lived in the parent directory: `ERR_PNPM_CATALOG_ENTRY_NOT_FOUND_FOR_SPEC` on a clean clone.
-Found only because I cloned to a scratch path and ran install rather than assuming. A repo a
-reviewer can follow is a deliverable, and mine was broken for every reader.
+Found only because I cloned to a scratch path and ran install.
 
 **The worst bug in the build, found by drill 5 and not by me.** The Function caches each
 origin URL per isolate and drops it when the origin stops answering — except a dead quick tunnel
@@ -111,14 +114,8 @@ origin URL per isolate and drops it when the origin stops answering — except a
 `fetch` resolves, the retry path never ran, and an isolate holding a stale URL served that 530
 for the rest of its life. That is why the hostname alternated 200/530 by isolate. My retry was
 correct and unreachable, which is the most expensive kind of wrong. Both the Function and the
-supervisor's liveness probe now key on the right signal: the probe treats *any* HTTP status as
-healthy, because a 403 from the origin means the whole path worked.
-
-**Two Terraform drifts, found by re-planning after the first apply** — the habit, not the
-finding. Cloudflare returns the Turnstile `domains` list sorted and Terraform compares lists
-positionally, so an unsorted config diffs forever; and the partner application had silently
-inherited the provider's default session duration, making R15's "deliberate choice" really
-"whatever the provider picked".
+supervisor's probe now key on the right signal: *any* HTTP status is healthy, because a 403 from
+the origin means the whole path worked.
 
 **An overclaim I retracted.** I described R28 — a service principal refused on a human route —
 as demonstrable in production. It is not: Access refuses the token at the edge with a 302, so
@@ -127,14 +124,14 @@ for the console's own audience so `aud` cannot be what refuses it. The check is 
 of where you can watch it was wrong.
 
 **Of the seven listed traps, none bit me** — R14's ordering, R21's header, R22's `aud` and
-R29's per-IP counter were designed for from the start. What cost time was operational: an
-environment variable name, deploy-time secret binding, a repo that only worked on the machine
-that wrote it, and an error path that could not be reached. Roughly where I would expect real
-incidents to come from, too.
+R29's per-IP counter were designed for from the start. What cost time was operational: a
+variable name, deploy-time secret binding, a repo that only worked on the machine that wrote it,
+and an error path that could not be reached. Roughly where real incidents come from, too.
 
 ## Not done, and why
 
 §7 (SSH and WARP through Access, 7 points) and the firewall half of R6 need root on this box.
-R40's rebuild and R42's first two drills need a `terraform apply` I cannot run myself. R8's
-connector is script-supervised, not a systemd unit — drill 5 is what that costs. Each is named
-where it is missing rather than described as done.
+R8's connector is script-supervised, not a systemd unit — drill 5 is what that costs. R40 is
+done: 12 resources destroyed and rebuilt in 291s with no dashboard click, and six
+Cloudflare-issued identifiers changed underneath, which is the part that actually makes a
+rebuild hard. Each remaining gap is named where it is missing rather than described as done.
