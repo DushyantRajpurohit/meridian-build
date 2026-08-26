@@ -19,7 +19,7 @@ it and R24 has a live bypass to close, and the origin sits behind a public
 | §4 Origin enforcement (R17–R24) | **live** — both R24 bypass routes closed with the origin's own refusals |
 | §5 Machine-to-machine (R25–R28) | **live** — a real service token reads the partner API end to end |
 | §6 Public surface (R29–R32) | **live** — rate limit, user-agent rule and Turnstile all firing at the edge |
-| §8 Infrastructure as code (R37–R40) | **applied** — 10 resources, plan clean; R40's destroy/rebuild not yet exercised |
+| §8 Infrastructure as code (R37–R40) | **applied** — 12 resources, plan clean; rebuild scripted, R40's destroy/apply not yet exercised |
 | §9 Ops and threat model (R41–R43) | R43 **written**; R42's runbooks written but not timed; R41 needs the audit-log pull |
 | §7 Operational access (R33–R36) | not started — needs `sshd` and root |
 | §11 free-path plumbing | **deployed** — Function, edge signature and three quick tunnels live |
@@ -281,8 +281,27 @@ cp terraform.tfvars.example terraform.tfvars    # then fill it in
 terraform init
 ./tf.sh plan
 ./tf.sh apply
-./tf.sh destroy && ./tf.sh apply                # R40, with no dashboard click in between
+./tf.sh destroy -auto-approve && ./tf.sh apply -auto-approve   # R40
 ```
+
+**R40 is five commands, not two, and the other three are the interesting ones.** `destroy` +
+`apply` rebuilds the Cloudflare side, but that cycle changes **seven values the running system
+depends on**: a new KV namespace id, two new Access AUD tags, two new service-token client ids,
+and a new Turnstile keypair. Nothing on the box knows any of that yet. The full cycle:
+
+```bash
+cd terraform && ./tf.sh destroy -auto-approve && ./tf.sh apply -auto-approve && cd ..
+pnpm run env:sync        # pull all seven out of terraform output into .env
+pnpm run pages:secrets   # BEFORE deploying — Pages binds secrets at deploy time
+pnpm run pages:deploy    # then again with --branch staff and --branch api
+                         # restart the origin and the tunnel supervisor
+```
+
+The ordering of the middle two is not stylistic. Deploy before setting secrets and the Function
+runs with an empty `EDGE_HMAC_SECRET`, which produces `error code: 1101` on every request and
+`DataError: Imported HMAC key length (0)` in the deployment tail — a symptom that names no
+layer. `env:sync` also refuses to write if the two AUD tags ever come back identical, because
+that is the R22 vulnerability arriving as a config bug rather than a code one.
 
 `tf.sh` is the only path to the API. It lifts the scoped token out of `.env` (mode 600,
 gitignored) into `CLOUDFLARE_API_TOKEN` for the provider, so the token never reaches a shell
@@ -353,11 +372,15 @@ Honest ledger of what is still outstanding:
   SSH through Access, the LAN-rule deletion and reboot, and WARP enrolment are all ahead.
 - **R6's firewall half.** No non-loopback listener exists and every surface binds `127.0.0.1`,
   but `ufw default deny incoming` needs root and has not been set.
-- **R40 has not been exercised.** The plan is clean and the configuration is complete, but
-  `destroy` followed by `apply` has not actually been run end to end.
-- **R42's drills 1 and 2 are untimed.** Both need a `terraform apply` to perform, so the
-  procedures are written and ordered but carry no number. Drill 4 has been run and timed
-  (3s to diagnose, 14s to recover). R41's pull is done and is in `docs/41-audit-logs.md`.
+- **R40 has not been exercised.** The plan is clean, the configuration is complete, and the
+  rebuild is now a scripted five-command procedure (above) rather than dashboard archaeology —
+  but `destroy` followed by `apply` has not actually been run end to end. Until it has, R40 is
+  a claim about the configuration, not a demonstration.
+- **R42: all four runnable drills are performed and timed.** 1 (leaver) 67s; 2 (token
+  rotation) **96s against a 60s target — missed**, for reasons written up rather than smoothed
+  over; 4 (console down) 3s to diagnose and 14s to recover; 5 (unplanned, the tunnels died on
+  their own) ~90s and 53s. R41's audit-log pull is done. Drill 3 has no counterpart on this
+  path — a quick tunnel has no token to leak.
 - **R8** needs a named tunnel with a systemd unit; the three quick tunnels here are supervised
   by a script and do not survive a reboot unattended. The supervisor now probes each published
   hostname every 60s and rebuilds a connector whose hostname has been reaped — see drill 5,
