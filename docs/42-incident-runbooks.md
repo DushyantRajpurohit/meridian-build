@@ -215,6 +215,23 @@ HTTP status as healthy, including 403**: the origin refusing an unsigned request
 whole path worked, so a status code is the success condition and only a thrown `fetch` — DNS or
 connect failing — counts as death.
 
+**And then the fix was itself wrong, which is the part worth reading.** The first probe used a
+10-second timeout and never consumed the response bodies. In Node an unread body leaves the
+socket checked out of undici's pool, so the next probe against the same host waited on a
+connection that never freed and timed out — and the supervisor diagnosed *its own leak* as a
+dead tunnel and rebuilt a healthy one. Watching it rotate a hostname that answered `403` in
+under a second from `curl` is how I found it. Cancelling the body fixed it, and three probe
+rounds then passed with no rotations.
+
+Two guards went in alongside, both because a false positive here is worse than the disease — a
+needless rotation costs the Function a cold KV read and the visitor a failed request:
+
+- **Three consecutive failures, not two**, at a 15-second timeout.
+- **If every surface fails in the same round, do nothing.** Three independent tunnels do not die
+  in the same instant; a mobile hotspot dropping for ten seconds looks exactly like that, and
+  rotating all three hostnames in response would manufacture the outage the probe exists to
+  prevent. A total failure is logged and waited out; only a partial one is acted on.
+
 **The Pages Function turned a rotation into a permanent outage per isolate.** This one is worse,
 and I only found it because the canonical hostname alternated between 200 and 530 after the
 restart depending on which isolate answered. The Function caches the origin URL per isolate and

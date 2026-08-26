@@ -39,8 +39,8 @@ let stopping = false
 // How often to ask whether the published hostname still answers, and how many consecutive
 // failures are needed before the connector is torn down and rebuilt.
 const PROBE_INTERVAL_MS = 60_000
-const PROBE_TIMEOUT_MS = 10_000
-const FAILURES_BEFORE_RESTART = 2
+const PROBE_TIMEOUT_MS = 15_000
+const FAILURES_BEFORE_RESTART = 3
 const failures = new Map<string, number>()
 
 for (const surface of SURFACES) start(surface.name, surface.port)
@@ -107,33 +107,58 @@ function start(name: string, port: number): void {
 async function probeAll(): Promise<void> {
   if (stopping) return
 
-  await Promise.all(
-    SURFACES.map(async (surface) => {
-      const url = published.get(surface.name)
-      if (url === undefined) return
+  const live = SURFACES.filter((surface) => published.has(surface.name))
+  if (live.length === 0) return
 
-      if (await answers(url)) {
-        failures.set(surface.name, 0)
-        return
-      }
-
-      const count = (failures.get(surface.name) ?? 0) + 1
-      failures.set(surface.name, count)
-      console.error(`[${surface.name}] probe failed (${String(count)}/${String(FAILURES_BEFORE_RESTART)}) ${url}`)
-      if (count < FAILURES_BEFORE_RESTART) return
-
-      console.error(`[${surface.name}] hostname is gone, rebuilding the connector`)
-      failures.set(surface.name, 0)
-      // Killing it is the restart: the exit handler owns respawning and republishing, so
-      // there is exactly one code path that starts a tunnel.
-      children.get(surface.name)?.kill('SIGTERM')
-    }),
+  const results = await Promise.all(
+    live.map(async (surface) => ({
+      surface,
+      ok: await answers(published.get(surface.name) as string),
+    })),
   )
+
+  // If EVERY surface fails in the same round, the fault is almost certainly this box's uplink
+  // rather than three independent tunnels dying at the same instant. Rotating all three
+  // hostnames because the hotspot dropped for ten seconds would turn a blip into a real
+  // outage: every rotation costs the Function a cold KV read and the visitor a failed
+  // request. So a total failure is logged and waited out, and only a partial one is acted on.
+  //
+  // I know this matters because the first version rebuilt a healthy tunnel. It probed with a
+  // 10s timeout and never consumed the response bodies, which in Node keeps the socket busy
+  // and made later probes on the same host time out — the supervisor's own leak looked
+  // exactly like a dead tunnel. Both are fixed below; the all-or-nothing guard stays because
+  // it is the difference between a probe that heals and a probe that flaps.
+  if (results.every((result) => !result.ok)) {
+    console.error(`[probe] all ${String(live.length)} surfaces unreachable — treating as a local network fault, not rotating`)
+    return
+  }
+
+  for (const { surface, ok } of results) {
+    if (ok) {
+      failures.set(surface.name, 0)
+      continue
+    }
+
+    const count = (failures.get(surface.name) ?? 0) + 1
+    failures.set(surface.name, count)
+    console.error(`[${surface.name}] probe failed (${String(count)}/${String(FAILURES_BEFORE_RESTART)})`)
+    if (count < FAILURES_BEFORE_RESTART) continue
+
+    console.error(`[${surface.name}] hostname is gone, rebuilding the connector`)
+    failures.set(surface.name, 0)
+    // Killing it is the restart: the exit handler owns respawning and republishing, so
+    // there is exactly one code path that starts a tunnel.
+    children.get(surface.name)?.kill('SIGTERM')
+  }
 }
 
 async function answers(url: string): Promise<boolean> {
   try {
-    await fetch(url, { method: 'GET', signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) })
+    const response = await fetch(url, { method: 'GET', signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) })
+    // Not optional. An unread body leaves the socket checked out of undici's pool, so the
+    // next probe against the same host waits for a connection that never frees and times out.
+    // The supervisor then diagnoses its own leak as a dead tunnel and rebuilds a healthy one.
+    await response.body?.cancel()
     return true
   } catch {
     return false
