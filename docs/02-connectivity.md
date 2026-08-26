@@ -61,10 +61,29 @@ ingress:
 This is the answer, and it surprises people who expect a runtime 404. The final rule is not a
 default that `cloudflared` falls back on — it is a *validation requirement*. A rule with no
 `hostname` and no `path` is what makes the table total, and `cloudflared` checks that the last
-rule is such a rule before it will run. Without it you get
-`ingress: The last ingress rule must match all URLs (i.e. it should not have a hostname or path
-filter)` and the process exits non-zero. `cloudflared tunnel ingress validate` reports the same
-thing without starting anything.
+rule is such a rule before it will run.
+
+Verified rather than asserted (GR5), with `cloudflared 2026.8.2` and the table above, once with
+the catch-all and once with the last line deleted:
+
+```
+$ cloudflared tunnel --config good.yml ingress validate
+Validating rules from good.yml
+OK
+$ echo $?
+0
+
+$ cloudflared tunnel --config bad.yml ingress validate
+Validating rules from bad.yml
+Validation failed: The last ingress rule must match all URLs (i.e. it should not have a
+hostname or path filter)
+$ echo $?
+1
+```
+
+The non-zero exit is the whole point: `cloudflared tunnel run` performs the same validation at
+startup, so a table without a catch-all does not start a connector that then 404s — it fails to
+start a connector at all.
 
 **Why it is designed that way, which is the more interesting half.** An ingress table is
 evaluated top to bottom and stops at the first match, exactly like the Access policies in R14.

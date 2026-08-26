@@ -17,9 +17,13 @@ it and R24 has a live bypass to close, and the origin sits behind a public
 | §5 Machine-to-machine (R25–R28) | origin half built and tested; needs a real service token |
 | §6 Public surface (R29–R32) | **built, tested** — rate limiter and filtering rule in the Pages Function, Turnstile and webhook signature at the origin |
 | §11 free-path plumbing | Pages Function, edge signature and the tunnel supervisor written; nothing deployed |
-| §1–§3, §7–§9 | not started — all need a Cloudflare account |
+| §1 Edge and transport (R1–R5) | **written** — R2/R3 are written answers on this path, see `docs/` |
+| §2 Connectivity (R6–R11) | R7/R9/R11 **written**, R7 verified against `cloudflared`; R6/R8 need the live box; R10 unavailable on this path |
+| §8 Infrastructure as code (R37–R40) | **written, validated, planned** — 10 resources, not yet applied |
+| §9 Ops and threat model (R41–R43) | R43 **written**; R42's four runbooks written but not yet timed; R41 needs live logs |
+| §3, §5 live half, §7 | not started — all need the apply, and §7 needs `sshd` and root |
 
-**38 tests green**, none of which need a Cloudflare account.
+**38 tests green** on Node 24, none of which need a Cloudflare account.
 
 ## What is here
 
@@ -281,3 +285,16 @@ Nothing here has met Cloudflare. There is no account, no tunnel, no Access appli
 `cloudflared`, `terraform` and `wrangler` are not installed on the box. The enforcement code
 is written against the token format and proven against a local team that mints the same
 shape; the live half of every requirement is still ahead.
+
+## Toolchain
+
+`cloudflared` 2026.8.2 (in `~/.local/bin`) and `wrangler` 4.126.0 (a workspace devDependency,
+so it is pinned by the catalog like everything else).
+
+Wrangler 4 requires **Node 22 or newer**; this box was on Node 20, so the project pins Node 24
+in `.nvmrc`. Run `nvm use` in this directory before `pnpm deploy`. The catalog was already
+typing against `@types/node ^24`, so this closes a gap where the types and the runtime
+disagreed. `pnpm test`, `pnpm typecheck` and `pnpm lint` all pass on Node 24.
+
+**Note:** `workerd` is in `onlyBuiltDependencies` for the same reason `esbuild` is: it fetches a
+platform binary in a postinstall, and without the approval `wrangler pages dev` cannot start.

@@ -11,7 +11,9 @@
     "rehearse": "tsx scripts/rehearsal.ts",
     "lint": "oxlint -c ../.oxlintrc.json src scripts test",
     "typecheck": "tsc -p tsconfig.json && tsc -p pages/tsconfig.json",
-    "test": "vitest run"
+    "test": "vitest run",
+    "deploy": "wrangler pages deploy pages/public --project-name meridian-clinic",
+    "edge:dev": "wrangler pages dev pages/public"
   },
   "dependencies": {
     "express": "catalog:",
@@ -24,6 +26,7 @@
     "oxlint": "catalog:",
     "tsx": "catalog:",
     "typescript": "catalog:",
-    "vitest": "catalog:"
+    "vitest": "catalog:",
+    "wrangler": "catalog:"
   }
 }
