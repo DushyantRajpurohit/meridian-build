@@ -19,7 +19,7 @@ it and R24 has a live bypass to close, and the origin sits behind a public
 | §4 Origin enforcement (R17–R24) | **live** — both R24 bypass routes closed with the origin's own refusals |
 | §5 Machine-to-machine (R25–R28) | **live** — a real service token reads the partner API end to end |
 | §6 Public surface (R29–R32) | **live** — rate limit, user-agent rule and Turnstile all firing at the edge |
-| §8 Infrastructure as code (R37–R40) | **applied** — 12 resources, plan clean; rebuild scripted, R40's destroy/apply not yet exercised |
+| §8 Infrastructure as code (R37–R40) | **applied and rebuilt** — 12 resources destroyed and recreated end to end in 291s, no dashboard click; see [`docs/40-rebuild.md`](docs/40-rebuild.md) |
 | §9 Ops and threat model (R41–R43) | R43 **written**; R42's runbooks written but not timed; R41 needs the audit-log pull |
 | §7 Operational access (R33–R36) | not started — needs `sshd` and root |
 | §11 free-path plumbing | **deployed** — Function, edge signature and three quick tunnels live |
@@ -265,6 +265,7 @@ bottom.
 |---|---|
 | [`docs/01-edge-and-transport.md`](docs/01-edge-and-transport.md) | R1–R5. What Flexible TLS actually does to the connection; the HSTS-preload-and-lose-the-domain question; `/cdn-cgi/trace` in triage; whether the origin IP was ever published, and the production remedy when the answer is yes |
 | [`docs/02-connectivity.md`](docs/02-connectivity.md) | R6–R11. Why a missing ingress catch-all stops `cloudflared` from starting rather than producing a 404; credentials file vs connector token and which is worse to leak; 1033 vs 1016 vs origin 502, and what each accuses |
+| [`docs/40-rebuild.md`](docs/40-rebuild.md) | R40. The destroy-and-rebuild, performed: what 12 destroyed resources looked like from outside, which six Cloudflare-issued identifiers changed underneath, and the 291-second measured rebuild |
 | [`docs/41-audit-logs.md`](docs/41-audit-logs.md) | R41. The audit log pulled as JSON — and why two of the three things R41 asks for are absent from it, permanently. Access logs identity events, not refusals |
 | [`docs/42-incident-runbooks.md`](docs/42-incident-runbooks.md) | R42. Four procedures, written before being timed. Drill 4 performed against the live system and timed; 1 and 2 blocked on an apply, and say so |
 | [`docs/43-threat-model.md`](docs/43-threat-model.md) | R43. Assets, actors, what this stops — and the longer list of what it does not |
@@ -372,10 +373,6 @@ Honest ledger of what is still outstanding:
   SSH through Access, the LAN-rule deletion and reboot, and WARP enrolment are all ahead.
 - **R6's firewall half.** No non-loopback listener exists and every surface binds `127.0.0.1`,
   but `ufw default deny incoming` needs root and has not been set.
-- **R40 has not been exercised.** The plan is clean, the configuration is complete, and the
-  rebuild is now a scripted five-command procedure (above) rather than dashboard archaeology —
-  but `destroy` followed by `apply` has not actually been run end to end. Until it has, R40 is
-  a claim about the configuration, not a demonstration.
 - **R42: all four runnable drills are performed and timed.** 1 (leaver) 67s; 2 (token
   rotation) **96s against a 60s target — missed**, for reasons written up rather than smoothed
   over; 4 (console down) 3s to diagnose and 14s to recover; 5 (unplanned, the tunnels died on
