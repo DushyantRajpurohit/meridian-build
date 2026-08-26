@@ -1,0 +1,29 @@
+{
+  "name": "assignment-3-meridian-build",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Meridian Clinic on Cloudflare Zero Trust: three Node surfaces behind a tunnel, each gating itself on a verified Access token.",
+  "scripts": {
+    "start": "tsx --env-file=.env src/index.ts",
+    "dev": "tsx watch --env-file=.env src/index.ts",
+    "forge": "tsx scripts/forge.ts",
+    "rehearse": "tsx scripts/rehearsal.ts",
+    "lint": "oxlint -c ../.oxlintrc.json src scripts test",
+    "typecheck": "tsc -p tsconfig.json && tsc -p pages/tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "express": "catalog:",
+    "jose": "catalog:"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "catalog:",
+    "@types/express": "catalog:",
+    "@types/node": "catalog:",
+    "oxlint": "catalog:",
+    "tsx": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

@@ -1,0 +1,8 @@
+node_modules/
+.env
+*.tfvars
+*.tfstate
+*.tfstate.*
+.terraform/
+.wrangler/
+forged-keys.json

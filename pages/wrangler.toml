@@ -1,0 +1,14 @@
+# R37/GR4 — the Pages project as code. Deploy with:
+#   pnpm wrangler pages deploy --project-name meridian-clinic
+#
+# Two things here are deliberately not in this file:
+#   * EDGE_HMAC_SECRET — a secret, so `wrangler pages secret put EDGE_HMAC_SECRET` (GR2).
+#   * the KV namespace id — created by Terraform and written in by `terraform apply`, so
+#     that destroy/apply (R40) does not leave a stale id committed here.
+name = "meridian-clinic"
+pages_build_output_dir = "public"
+compatibility_date = "2026-08-25"
+
+[[kv_namespaces]]
+binding = "MERIDIAN_KV"
+id = "REPLACED_BY_TERRAFORM"

@@ -1,0 +1,16 @@
+# Copy to terraform.tfvars and fill in. *.tfvars is gitignored (GR2).
+account_id = ""
+
+# R13 — the named staff. Use addresses that can actually receive a one-time PIN.
+staff_emails = [
+  "you@example.com",
+]
+
+# R14 — at least one address for the Block-above-Allow demonstration.
+blocked_emails = [
+  "former.staff@meridian.test",
+]
+
+# Filled in after the Pages project exists; see README.
+admin_hostname   = "staff.meridian-clinic.pages.dev"
+partner_hostname = "api.meridian-clinic.pages.dev"
