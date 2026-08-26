@@ -265,8 +265,10 @@ bottom.
 |---|---|
 | [`docs/01-edge-and-transport.md`](docs/01-edge-and-transport.md) | R1–R5. What Flexible TLS actually does to the connection; the HSTS-preload-and-lose-the-domain question; `/cdn-cgi/trace` in triage; whether the origin IP was ever published, and the production remedy when the answer is yes |
 | [`docs/02-connectivity.md`](docs/02-connectivity.md) | R6–R11. Why a missing ingress catch-all stops `cloudflared` from starting rather than producing a 404; credentials file vs connector token and which is worse to leak; 1033 vs 1016 vs origin 502, and what each accuses |
-| [`docs/42-incident-runbooks.md`](docs/42-incident-runbooks.md) | R42. Four procedures, written before being timed. Timings unfilled until run live |
+| [`docs/41-audit-logs.md`](docs/41-audit-logs.md) | R41. The audit log pulled as JSON — and why two of the three things R41 asks for are absent from it, permanently. Access logs identity events, not refusals |
+| [`docs/42-incident-runbooks.md`](docs/42-incident-runbooks.md) | R42. Four procedures, written before being timed. Drill 4 performed against the live system and timed; 1 and 2 blocked on an apply, and say so |
 | [`docs/43-threat-model.md`](docs/43-threat-model.md) | R43. Assets, actors, what this stops — and the longer list of what it does not |
+| [`WRITEUP.md`](WRITEUP.md) | The ≤1500-word deliverable: threat model, incident timings, and what I got wrong and what it cost |
 
 ## Infrastructure as code (§8)
 
@@ -353,8 +355,9 @@ Honest ledger of what is still outstanding:
   but `ufw default deny incoming` needs root and has not been set.
 - **R40 has not been exercised.** The plan is clean and the configuration is complete, but
   `destroy` followed by `apply` has not actually been run end to end.
-- **R41's audit-log pull** has not been done, and **R42's four procedures are written but not
-  timed** — the numbers must come from performing them, not from estimating them.
+- **R42's drills 1 and 2 are untimed.** Both need a `terraform apply` to perform, so the
+  procedures are written and ordered but carry no number. Drill 4 has been run and timed
+  (3s to diagnose, 14s to recover). R41's pull is done and is in `docs/41-audit-logs.md`.
 - **R8** needs a named tunnel with a systemd unit; the three quick tunnels here are supervised
   by a script and do not survive a reboot unattended.
 - **The reviewer's test identity and the recording** are outstanding.
@@ -366,8 +369,8 @@ model, which says so about itself.
 
 ## Toolchain
 
-`cloudflared` 2026.8.2 (in `~/.local/bin`) and `wrangler` 4.126.0 (a workspace devDependency,
-so it is pinned by the catalog like everything else).
+`cloudflared` 2026.8.2 (in `~/.local/bin`) and `wrangler` 4.126.0 (a devDependency of this repo,
+pinned to an exact version — see below for why this repo does not use the parent catalog).
 
 Wrangler 4 requires **Node 22 or newer**; this box was on Node 20, so the project pins Node 24
 in `.nvmrc`. Run `nvm use` in this directory before `pnpm deploy`. The catalog was already
