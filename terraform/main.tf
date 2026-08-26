@@ -23,10 +23,14 @@ resource "cloudflare_pages_project" "clinic" {
 # R25 — the partner lab's credentials. The client secret is created by Cloudflare and is
 # available in state, which is exactly why state is gitignored and why R42's rotation drill
 # exists.
-resource "cloudflare_zero_trust_access_service_token" "partner_lab" {
+# R42 drill 2, step 1 — the replacement credential, created BEFORE anything is revoked.
+# Both tokens are valid simultaneously and the policy below admits either, so the partner can
+# migrate at their own pace and the clock that matters has not started yet. Deleting first and
+# creating second is the same two API calls in the order that guarantees an outage.
+resource "cloudflare_zero_trust_access_service_token" "partner_lab_2" {
   account_id = var.account_id
-  name       = "partner-lab"
-  duration   = "8760h" # one year, and rotated on demand — see R42
+  name       = "partner-lab-2"
+  duration   = "8760h"
 }
 
 # ---------------------------------------------------------------------------------------
@@ -68,8 +72,10 @@ resource "cloudflare_zero_trust_access_policy" "partner_service" {
   name       = "meridian-partner-service-auth"
   decision   = "non_identity"
 
+  # Two tokens during a rotation. An include list is an OR, so either credential opens the
+  # application and there is no window in which neither does.
   include = [
-    { service_token = { token_id = cloudflare_zero_trust_access_service_token.partner_lab.id } }
+    { service_token = { token_id = cloudflare_zero_trust_access_service_token.partner_lab_2.id } },
   ]
 }
 

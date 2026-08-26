@@ -16,17 +16,6 @@ output "kv_namespace_id" {
   value       = cloudflare_workers_kv_namespace.meridian.id
 }
 
-output "partner_client_id" {
-  description = "PARTNER_CLIENT_IDS, and the CF-Access-Client-Id the lab sends"
-  value       = cloudflare_zero_trust_access_service_token.partner_lab.client_id
-}
-
-output "partner_client_secret" {
-  description = "The lab's CF-Access-Client-Secret. Shown once by Cloudflare; kept out of logs here."
-  value       = cloudflare_zero_trust_access_service_token.partner_lab.client_secret
-  sensitive   = true
-}
-
 output "pages_subdomain" {
   description = "The canonical hostname — the one Access does NOT protect (R16, R24)"
   value       = cloudflare_pages_project.clinic.subdomain
@@ -52,4 +41,14 @@ output "reviewer_client_secret" {
   description = "Deliverable 3 — the reviewer's CF-Access-Client-Secret"
   value       = cloudflare_zero_trust_access_service_token.reviewer.client_secret
   sensitive   = true
+}
+
+output "partner_client_id_2" {
+  description = "R42 drill 2 — the replacement partner credential, valid alongside the original."
+  value       = cloudflare_zero_trust_access_service_token.partner_lab_2.client_id
+}
+
+output "partner_client_secret_2" {
+  value     = cloudflare_zero_trust_access_service_token.partner_lab_2.client_secret
+  sensitive = true
 }

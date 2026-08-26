@@ -6,8 +6,8 @@ step. The times below are recorded on execution; unfilled rows are not yet run a
 
 | # | Procedure | Target | Measured |
 |---|---|---|---|
-| 1 | Staff member leaves — revoke and terminate live session | — | _blocked: needs `terraform apply`_ |
-| 2 | Service token in a public paste — rotate | **< 60s** partner downtime | _blocked: needs `terraform apply`_ |
+| 1 | Staff member leaves — revoke and terminate live session | — | **67s** end to end |
+| 2 | Service token in a public paste — rotate | **< 60s** partner downtime | **96s — missed** |
 | 3 | Tunnel token leaks — assess and respond | — | n/a on this path — a quick tunnel has no token |
 | 4 | Staff console down — five-step triage | — | **diagnose 3s, recover 14s, total 17s** |
 | 5 | *Unplanned:* the quick tunnels died on their own | — | **diagnose ~90s, recover 53s** |
@@ -27,17 +27,48 @@ is obvious.
    at precedence 1, so it denies them even if a future edit, a group membership, or a mistake
    puts them back in an Allow. Removal is the absence of permission; the Block is the presence
    of a denial, and only the second survives someone else's error.
-4. **Terminate the live session** — the step people miss. Cloudflare Access revokes a user's
+4. **Remove them from the origin's allowlist too** — `STAFF_EMAILS` in the origin's environment,
+   which `requireUser` checks independently of Access. This step was added after running the
+   drill; see below. Restart the origin so it takes effect.
+5. **Terminate the live session** — the step people miss. Cloudflare Access revokes a user's
    active sessions from the Zero Trust user registry. In the API this is the
    `/access/organizations/revoke_user` call against the account, by email.
-5. Verify: their existing `CF_Authorization` cookie now fails. The origin will reject it
+6. Verify: their existing `CF_Authorization` cookie now fails. The origin will reject it
    independently of the edge once it expires, but revocation is what makes that immediate
    rather than eventual.
-6. Rotate anything they held that is not identity-bound — shared secrets are not revoked by
+7. Rotate anything they held that is not identity-bound — shared secrets are not revoked by
    removing a person.
 
 **Why the Block, given the Allow no longer matches them:** defence against the *next* edit, not
 this one. R14's ordering exists precisely so that a deny is not silently overridden later.
+
+### Performed, with a clock
+
+The locum in `staff_emails` was the leaver. **67 seconds end to end**, 36 of them to the point
+where the identity could no longer obtain or hold a session.
+
+```
+t+0s    remove from staff_emails, add to blocked_emails
+t+~20s  terraform apply
+t+~30s  remove from STAFF_EMAILS in .env, restart the origin
+t+36s   POST /access/organizations/revoke_user   -> {"success": true, "result": true}
+t+67s   verified: Allow includes 5 addresses, Block includes the locum
+```
+
+**The step I had not written down, and found by doing it: the allowlist exists in two places.**
+Cloudflare Access holds one (the Allow policy) and the origin holds another
+(`STAFF_EMAILS`, checked by `requireUser`). Editing only the Terraform side leaves the origin
+still willing to serve that identity — harmless while Access refuses them, and a live hole the
+moment anything reaches the origin on the unbound canonical hostname, which is exactly the path
+this whole build exists to defend. So a leaver is a **three-place** change plus a revocation:
+Allow, Block, origin allowlist, then terminate the session.
+
+Worse, I found the two lists had **already drifted**: Access allowed six addresses and the origin
+allowed one. Five staff would have passed the edge and been refused by the origin with
+`not_on_staff_allowlist` — a failure that reads as a broken login and is really a stale config.
+Synced before the drill, and it is the kind of drift that only a rehearsal surfaces.
+
+The step is now in the numbered procedure above. It was not there before I ran it.
 
 ---
 
@@ -57,9 +88,13 @@ The order that meets the constraint is **create, distribute, then revoke**:
    leaked, and wait for them to confirm they are using it. **This wait costs nothing**, because
    the old token still works — which is the entire point of the ordering. The clock that matters
    has not started.
-4. **Now** remove the leaked token from the policy and destroy it. This is the only step that
-   interrupts anything, and it interrupts only callers still using the leaked credential —
-   which, after step 3, is nobody legitimate.
+4. **Now** revoke the leaked token — and this is **two applies, not one**, which I learned by
+   getting it wrong under the clock. First detach it from the policy
+   (`apply -target=…access_policy.partner_service`), then remove the resource and apply again.
+   Terraform will otherwise plan the delete before the policy update and Cloudflare refuses it
+   with `400 code 12139: cannot delete service token because it is used by a policy`. This is
+   the only step that interrupts anything, and it interrupts only callers still using the leaked
+   credential — which, after step 3, is nobody legitimate.
 5. Verify: a call with the leaked token returns 403; a call with the new token returns 200.
 
 The measured sixty seconds is step 4 alone, and it is short because steps 1–3 removed every
@@ -69,6 +104,39 @@ takes to answer email.
 **Caveat to record honestly:** the leaked token was valid for the entire interval between the
 paste appearing and step 4 completing. Rotation limits future damage; it does not undo access
 already taken. The audit-log pull in R41 is how I find out what was done with it.
+
+### Performed, with a clock — and it missed
+
+Steps 1–3 cost **zero downtime**, exactly as the ordering predicts: with `partner-lab-2` created
+and both tokens in the policy's include list, both credentials returned 200 at the same time.
+
+Step 4 — the only interrupting step, and the one the constraint applies to — took **96 seconds
+against a 60-second target. It missed, and the reason is worth more than a pass would have
+been.**
+
+```
+t+0s    remove the leaked token from the policy include list and delete the resource
+t+~25s  terraform apply  ->  Error: 400, code 12139
+                             "cannot delete service token because it is used by a policy"
+t+~55s  apply -target=…access_policy.partner_service   (detach only)
+t+~85s  apply                                          (destroy the token)
+t+96s   verified: new token 200, leaked credential refused
+```
+
+**Terraform ordered the destroy before the policy update.** The policy references the token, so
+the reference has to go first — but Terraform planned both in one apply and attempted the delete
+first, and Cloudflare correctly refused it. Recovering meant splitting the work into two applies
+with `-target`, which is thirty-odd seconds I had not budgeted because I had never run it.
+
+The procedure above is now corrected: **step 4 is two applies, not one.** Detach the leaked token
+from the policy and apply; then remove the resource and apply again. Anyone following the old
+version of this runbook under real pressure would have hit the same 400 and lost the same time,
+which is the entire argument for rehearsing a runbook rather than writing one.
+
+The consolation is that the miss cost nothing real. The partner was already on the new credential
+from step 3, so the 96 seconds were spent revoking a credential nobody legitimate was using —
+which is what the create/distribute/revoke ordering is *for*. Reverse the order and those same 96
+seconds are 96 seconds of a lab unable to deliver results.
 
 ---
 
