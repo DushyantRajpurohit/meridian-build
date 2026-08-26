@@ -4,6 +4,7 @@
 #
 #   sudo bash scripts/root-setup.sh base       # R6 firewall, R8 units, sshd, WARP, R35 address
 #   sudo bash scripts/root-setup.sh verify     # prove each of the above, change nothing
+#   sudo bash scripts/root-setup.sh harden     # key-based auth, then passwords off
 #   sudo bash scripts/root-setup.sh lockdown   # R34 ONLY — deletes the LAN SSH rule, reboots
 #
 # Every stage is idempotent: running it twice is a no-op, not a second copy. Nothing here
@@ -228,16 +229,71 @@ UNIT
   ufw allow from 192.168.0.0/16 to any port 22 proto tcp comment 'R34 — the LAN SSH rule, to be deleted' >/dev/null
   ufw allow from 10.0.0.0/8     to any port 22 proto tcp comment 'R34 — the LAN SSH rule, to be deleted' >/dev/null
   ufw --force enable >/dev/null
-  systemctl enable ssh >/dev/null 2>&1 || systemctl enable sshd >/dev/null 2>&1 || true
-  systemctl start  ssh 2>/dev/null || systemctl start sshd 2>/dev/null || true
   note "ufw enabled, default deny incoming, LAN SSH allowed for now"
+
+  head_ "R6/R33 — sshd on the operations address and nowhere else"
+  # Ubuntu 24.04 ships sshd under SOCKET ACTIVATION: ssh.socket owns :22 and spawns `sshd -i`
+  # per connection. `systemctl start ssh` then raises a SECOND, standalone listener on the same
+  # port and the two fight — the socket accepts a connection, triggers a service that is already
+  # running, and drops it. The symptom is `Connection closed by <host> port 22` immediately
+  # after the password prompt with NOTHING in the journal, because no sshd instance ever owned
+  # the connection long enough to log a line. That is not a credentials problem and reads
+  # exactly like one.
+  #
+  # Socket activation also makes `ListenAddress` dead config: the socket unit decides what to
+  # bind, not sshd_config. Binding only the operations address is the whole point here, so
+  # socket activation has to go rather than be worked around.
+  systemctl disable --now ssh.socket >/dev/null 2>&1 || true
+
+  install -d -m 0755 /etc/ssh/sshd_config.d
+  cat > /etc/ssh/sshd_config.d/10-meridian.conf <<SSHD
+# Written by scripts/root-setup.sh. R6/R33.
+#
+# The same argument as putting the address on \`lo\`: a /32 on loopback is never ARPed, so a
+# listener bound to it does not exist on the LAN at any layer. Turn ufw off entirely and this
+# is still unreachable from the wifi, because there is no interface to send a frame to. The
+# firewall becomes the second line rather than the only one.
+ListenAddress ${PRIVATE_IP}
+PermitRootLogin no
+
+# PasswordAuthentication is deliberately left at the distro default (yes) by \`base\`, so that
+# a wrong turn here costs a retry rather than the machine. \`harden\` installs a key and turns
+# it off, and is a separate stage for exactly that reason.
+SSHD
+
+  # sshd cannot bind an address that does not exist yet, so at boot it has to come up after the
+  # unit that puts the address on lo. Requires and not Wants: with no operations address there
+  # is nothing for sshd to answer on, and failing loudly beats listening nowhere.
+  install -d -m 0755 /etc/systemd/system/ssh.service.d
+  cat > /etc/systemd/system/ssh.service.d/10-meridian-ops-address.conf <<UNIT
+[Unit]
+After=meridian-ops-address.service
+Requires=meridian-ops-address.service
+UNIT
+
+  systemctl daemon-reload
+  systemctl enable ssh >/dev/null 2>&1 || true
+  systemctl restart ssh
+  if ss -tln | grep -qE "^LISTEN.*[^0-9.]${PRIVATE_IP}:22 "; then
+    note "sshd listening on ${PRIVATE_IP}:22 only"
+  else
+    note "WARNING: sshd is not bound to ${PRIVATE_IP}:22 — check: ss -tln | grep :22"
+  fi
 
   echo
   echo "base done. Next:"
   echo "  1. sudo bash scripts/root-setup.sh verify"
   echo "  2. enrol this machine in WARP:  warp-cli registration new && warp-cli connect"
-  echo "  3. prove the private path:      ssh ${RUN_USER}@${PRIVATE_IP}"
+  echo "     (if status says 'Registration Missing ... Does not exist in API', the local"
+  echo "      registration points at a device the account no longer has — clear it first:"
+  echo "      warp-cli registration delete; then run 'new' again)"
+  echo "  3. sudo bash scripts/root-setup.sh harden   # key auth, then passwords off"
   echo "  4. only then:                   sudo bash scripts/root-setup.sh lockdown"
+  echo
+  echo "  NOTE ON PROVING R33. 'ssh ${RUN_USER}@${PRIVATE_IP}' typed on THIS box goes over"
+  echo "  loopback — the address is on lo here, so the kernel answers before WARP is asked."
+  echo "  It succeeds with WARP switched off and proves nothing about the tunnel. The"
+  echo "  demonstration needs a SECOND device enrolled in the same WARP team."
 }
 
 # ---------------------------------------------------------------------------------------
@@ -247,7 +303,30 @@ UNIT
 stage_verify() {
   head_ "R6 — nothing listening off loopback"
   ss -ltn | awk 'NR==1 || ($4 !~ /^127\.|^\[::1\]/)'
-  echo "  (the operations address and sshd are expected here; anything else is a finding)"
+  # Judge the sshd line rather than waving at it. The first version of this stage printed
+  # "sshd is expected here", which passed a listener bound to 0.0.0.0 — every interface,
+  # including the wifi — as if it were the intended state. A check that accepts the thing it
+  # exists to catch is decoration.
+  if ss -ltn | grep -qE '^LISTEN.*(0\.0\.0\.0|\*|\[::\]):22 '; then
+    echo "  FINDING: sshd is bound to every interface, not just ${PRIVATE_IP}."
+    echo "           ufw is then the only thing keeping it off the LAN. Re-run: base"
+  elif ss -ltn | grep -qE "[^0-9.]${PRIVATE_IP}:22 "; then
+    echo "  sshd is bound to ${PRIVATE_IP}:22 only — not present on the LAN at any layer"
+  else
+    echo "  FINDING: nothing is listening on ${PRIVATE_IP}:22 — R33 has no destination"
+  fi
+  echo "  (anything else above is a finding)"
+
+  head_ "R33 — how this box itself routes to the operations address"
+  # The trap this section is most likely to hide. 10.99.0.1 is assigned to lo ON THIS BOX, so
+  # the kernel's `local` table answers for it before any WARP route is consulted. `ssh
+  # dushyant@10.99.0.1` typed here therefore never leaves the machine and proves NOTHING about
+  # the tunnel — it succeeds identically with WARP off, disconnected, or uninstalled.
+  ip route get "${PRIVATE_IP}" 2>&1 | head -1 | sed 's/^/  /'
+  if ip route get "${PRIVATE_IP}" 2>/dev/null | head -1 | grep -q '^local '; then
+    echo "  NOTE: that says 'local' — from this box the address is loopback, not the tunnel."
+    echo "        R33 can only be demonstrated from a SECOND device enrolled in WARP."
+  fi
 
   head_ "R6 — firewall"
   ufw status verbose | head -8
@@ -303,9 +382,74 @@ stage_lockdown() {
   systemctl reboot
 }
 
+
+# ---------------------------------------------------------------------------------------
+# harden — key-based auth. Separate from base because it is the stage that can lock you out.
+# ---------------------------------------------------------------------------------------
+
+stage_harden() {
+  local home key
+  home="$(getent passwd "${RUN_USER}" | cut -d: -f6)"
+  key="${home}/.ssh/id_ed25519"
+
+  head_ "R33 — a key for ${RUN_USER}"
+  if [[ -f "${key}" ]]; then
+    note "keypair already present at ${key}"
+  else
+    # Generated AS the user, so the private key is theirs and root never owns it. No
+    # passphrase: this key's job is to replace a password on a port that is already gated by
+    # WARP enrolment and a Gateway identity rule, and a passphrase-protected key the operator
+    # cannot use under pressure gets replaced by a password rule the day of the first incident.
+    # The tradeoff is stated here rather than left to be discovered in the file mode.
+    as_user ssh-keygen -t ed25519 -N '' -C "${RUN_USER}@meridian-ops" -f "${key}" >/dev/null
+    note "keypair generated at ${key}"
+  fi
+
+  as_user install -d -m 0700 "${home}/.ssh"
+  as_user touch "${home}/.ssh/authorized_keys"
+  as_user chmod 0600 "${home}/.ssh/authorized_keys"
+  if as_user grep -qFf "${key}.pub" "${home}/.ssh/authorized_keys" 2>/dev/null; then
+    note "public key already authorised"
+  else
+    as_user bash -c "cat '${key}.pub' >> '${home}/.ssh/authorized_keys'"
+    note "public key authorised"
+  fi
+
+  head_ "R33 — prove the key works BEFORE removing the password"
+  # The order matters and is the entire reason this is its own stage. Turn passwords off first
+  # and then discover the key is not accepted, and the only way back in is the console.
+  if as_user ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+       -o ConnectTimeout=5 "${RUN_USER}@${PRIVATE_IP}" true 2>/dev/null; then
+    note "key authentication succeeded"
+  else
+    die "key authentication did NOT succeed — leaving password auth on. Debug with:
+       ssh -v ${RUN_USER}@${PRIVATE_IP}
+     and re-run this stage once it works."
+  fi
+
+  head_ "R6 — passwords off"
+  cat > /etc/ssh/sshd_config.d/20-meridian-keys-only.conf <<'SSHD'
+# Written by scripts/root-setup.sh harden, and only after a key login was observed to work.
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+SSHD
+  systemctl restart ssh
+  note "password authentication disabled"
+
+  if as_user ssh -o BatchMode=yes -o ConnectTimeout=5 "${RUN_USER}@${PRIVATE_IP}" true 2>/dev/null; then
+    note "still reachable by key after the restart"
+  else
+    # Put it back rather than leave the operator locked out on the strength of a config file.
+    rm -f /etc/ssh/sshd_config.d/20-meridian-keys-only.conf
+    systemctl restart ssh
+    die "key login broke when passwords were removed — reverted, password auth is back on"
+  fi
+}
+
 case "${STAGE}" in
   base)     stage_base ;;
   verify)   stage_verify ;;
+  harden)   stage_harden ;;
   lockdown) stage_lockdown ;;
-  *) die "usage: sudo bash scripts/root-setup.sh {base|verify|lockdown}" ;;
+  *) die "usage: sudo bash scripts/root-setup.sh {base|verify|harden|lockdown}" ;;
 esac

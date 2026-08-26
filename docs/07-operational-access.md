@@ -215,3 +215,81 @@ checked and it is absent" is worse than no guard, because it is believed.
 Both fixed: the invoking user's `terraform` directory is resolved once through a login shell
 and prepended to the PATH `as_user` hands out, and a non-zero exit from `terraform state list`
 now stops with the error terraform actually printed instead of being read as absence.
+
+## The demonstration this box cannot give
+
+`ssh dushyant@10.99.0.1`, typed on the machine that hosts the address, never leaves the
+machine:
+
+```
+$ ip route get 10.99.0.1
+local 10.99.0.1 dev lo src 10.99.0.1
+```
+
+`10.99.0.1/32` is assigned to `lo` here, so the kernel's `local` routing table — consulted
+before every other table, and not overridable by a route WARP installs — answers for it. The
+connection is loopback. It succeeds identically with WARP disconnected, WARP uninstalled, the
+connector stopped, and the Gateway policies deleted, because none of those are on the path.
+
+This is not a fault in the build; it is the architecture working as designed. The connector
+runs *on* this box and reaches the surface over loopback precisely so that the surface never
+has to exist on a network. The consequence is that **the operator's own laptop is the one
+device that cannot prove the private path**, and a screenshot of a successful `ssh` from here
+is worth nothing as evidence. A second device enrolled in the same WARP team — a phone, a
+second laptop — is what demonstrates R33, because it is the only kind of client whose routing
+table does not already have an answer.
+
+The general form of the trap: a test run from inside the boundary tests the boundary from the
+wrong side. It will pass whether or not the boundary exists.
+
+## sshd bound to `0.0.0.0`, and the socket unit underneath it
+
+`base` originally ended with `systemctl enable ssh && systemctl start ssh`, which on Ubuntu
+24.04 is wrong twice over.
+
+**Ubuntu 24.04 runs sshd under socket activation.** `ssh.socket` owns `:22` and spawns
+`sshd -i` per connection. Starting `ssh.service` as well raises a second, standalone listener
+on the same port, and the two interfere: the socket accepts a connection, triggers a service
+already running, and the connection is dropped. The symptom is
+
+```
+dushyant@10.99.0.1's password:
+Connection closed by 10.99.0.1 port 22
+```
+
+with **nothing in `journalctl -u ssh`** beyond the listener starting — no auth failure, no
+disconnect reason, because no sshd instance owned the connection long enough to log one. It
+reads exactly like a rejected password, which is the expensive part: the obvious next move is
+to start doubting the credential, and the credential is fine.
+
+**Socket activation also makes `ListenAddress` dead config.** The socket unit decides what to
+bind; sshd_config is not consulted. So the listener sat on `0.0.0.0:22` and `[::]:22` — every
+interface, the wifi included — with `ufw` as the only thing keeping it off the LAN. That is
+precisely the posture R34 is about to make worse by deleting the LAN allow rule and trusting
+what remains.
+
+Both fixed together: `ssh.socket` is disabled, `ListenAddress 10.99.0.1` is written to
+`/etc/ssh/sshd_config.d/10-meridian.conf`, and a drop-in orders `ssh.service` after — and
+`Requires` — `meridian-ops-address.service`, because sshd cannot bind an address that does not
+exist yet and a reboot would otherwise race it. The listener is now on the /32 and nowhere
+else, which means the firewall is the second line rather than the only one: turn `ufw` off
+entirely and the LAN still has no frame to send.
+
+The `verify` stage said `(the operations address and sshd are expected here; anything else is
+a finding)` throughout — passing a listener on every interface as the intended state. A check
+that accepts the exact thing it exists to catch is decoration, and it is now a real assertion
+about the bound address.
+
+## Why `harden` is a separate stage
+
+Key-based auth is the right end state, and turning off `PasswordAuthentication` is the step
+that can lock the operator out of a machine whose LAN access is about to be deleted. So it is
+its own stage, run after `ssh` is known to work, and it does the steps in the only safe order:
+generate the key as the user, authorise it, **observe a `BatchMode=yes` login succeed**, and
+only then write the config that removes passwords — re-testing afterwards and reverting itself
+if the restart broke what it just proved.
+
+The key is generated without a passphrase, which is a real tradeoff and is stated rather than
+hidden: the port it protects is already behind WARP enrolment and a Gateway identity rule, and
+a passphrase the operator cannot type under incident pressure is how a password rule comes
+back the week after it was removed.
