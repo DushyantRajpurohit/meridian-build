@@ -42,7 +42,43 @@ PRIVATE_IP="$(as_user "${REPO}/terraform/tf.sh" output -raw private_host_ip 2>/d
 # base
 # ---------------------------------------------------------------------------------------
 
+# Refuse to build a box-side half that cannot work. Installing the connector while the three
+# Zero Trust resources are missing produces the worst failure in this build: `ssh 10.99.0.1`
+# opens a connection that goes nowhere, WARP calls the address local and puts it on the wifi,
+# and Cloudflare never sees the attempt — so there is nothing in any log to read. Better to
+# stop here with a sentence than to hand you that.
+preflight() {
+  local missing=()
+  local state
+  state="$(as_user "${REPO}/terraform/tf.sh" state list 2>/dev/null || true)"
+
+  grep -q 'cloudflare_zero_trust_tunnel_cloudflared\.private'          <<<"${state}" || missing+=("the named tunnel")
+  grep -q 'cloudflare_zero_trust_tunnel_cloudflared_route\.box'        <<<"${state}" || missing+=("the /32 private route")
+  grep -q 'cloudflare_zero_trust_device_custom_profile\.operator'      <<<"${state}" || missing+=("the split-tunnel profile (R35 — WARP will treat 10.99.0.1 as local without it)")
+  grep -q 'gateway_policy\.private_allow_operator'                     <<<"${state}" || missing+=("the Gateway allow policy (R36)")
+  grep -q 'gateway_policy\.private_block_everyone_else'                <<<"${state}" || missing+=("the Gateway block policy (R36 — without it the allow grants nothing)")
+
+  [[ ${#missing[@]} -eq 0 ]] && return 0
+
+  echo "root-setup: the Cloudflare side is incomplete. Missing:" >&2
+  printf '  - %s\n' "${missing[@]}" >&2
+  cat >&2 <<'MSG'
+
+The three Zero Trust resources need an API token scope the current token lacks. Check it:
+
+  curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $CF_API_TOKEN" \
+    https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT_ID/gateway/rules
+
+403 means the scope is missing. Add Account -> Zero Trust -> Edit to the token, put the new
+value in .env, then:  cd terraform && ./tf.sh apply
+
+MSG
+  exit 1
+}
+
 stage_base() {
+  preflight
+
   head_ "packages"
   # openssh-server: R33/R34 need something to reach. warp: R35's client path.
   export DEBIAN_FRONTEND=noninteractive
