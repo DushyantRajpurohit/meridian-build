@@ -31,7 +31,14 @@ const namespaceId = requireEnv('CF_KV_NAMESPACE_ID')
 // Scoped to Workers KV Storage:Edit on one namespace, and nothing else. See README §R38.
 const apiToken = requireEnv('CF_API_TOKEN')
 
-const QUICK_TUNNEL_URL = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/
+// Three or more hyphenated words, which is what a quick tunnel is always named, and NOT the
+// bare `api.trycloudflare.com`. That is cloudflared's own control-plane endpoint, and it prints
+// the URL in the error it logs when tunnel CREATION fails — so the loose pattern matched it,
+// latched `announced`, and published Cloudflare's API as this surface's origin. It self-healed
+// only because that connector exited and the next one won the race. A published origin that is
+// syntactically perfect and points at the wrong service is the worst shape a bug can take here:
+// nothing throws, and the Function faithfully forwards to it.
+const QUICK_TUNNEL_URL = /https:\/\/[a-z0-9]+(?:-[a-z0-9]+){2,}\.trycloudflare\.com/
 
 const children = new Map<string, ChildProcess>()
 const published = new Map<string, string>()

@@ -382,9 +382,11 @@ Honest ledger of what is still outstanding:
 - **R8** needs a named tunnel with a systemd unit; the three quick tunnels here are supervised
   by a script and do not survive a reboot unattended. The supervisor now probes each published
   hostname every 60s and rebuilds a connector whose hostname has been reaped, takes an exclusive
-  lock so a second supervisor cannot race it on the same KV keys, and asks a control URL before
-  writing a total failure off as a local outage — drills 5 and 6 are the incidents that proved
-  each of those needed — but a probe is not `Restart=always`, and nothing here starts at boot.
+  lock so a second supervisor cannot race it on the same KV keys, asks a control URL before
+  writing a total failure off as a local outage, and requires the three-hyphenated-word shape a
+  quick tunnel is always named with so cloudflared's own `api.trycloudflare.com` cannot be
+  published as an origin — drills 5 and 6 are the incidents that proved each of those needed —
+  but a probe is not `Restart=always`, and nothing here starts at boot.
 - **The reviewer's test identity and the recording** are outstanding.
 
 The staff Allow list is six Gmail plus-addresses that all deliver to one inbox. That proves the

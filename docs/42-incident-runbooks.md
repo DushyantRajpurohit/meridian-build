@@ -386,3 +386,40 @@ Drill 5's conclusion was that a quick tunnel is not a deployment. Drill 6 is the
 with a sharper edge: I had already written the fix, the fix worked, and the system went down
 again anyway from a second cause the fix had introduced. This is what R8's systemd requirement
 buys — not a smarter supervisor, but one fewer supervisor to be clever about.
+
+### A third fault, found in the log the fix wrote
+
+The supervisor's own log, read after the recovery above, contained this:
+
+```
+[public] hostname is gone, rebuilding the connector
+[public] cloudflared exited (0), restarting in 3s
+[public] cloudflared exited (1), restarting in 3s
+[public] https://api.trycloudflare.com → origin:public
+[public] https://dealers-assessment-strengthen-dip.trycloudflare.com → origin:public
+```
+
+The fourth line is a published origin pointing at **Cloudflare's own control-plane endpoint**.
+The hostname pattern was `https://[a-z0-9-]+\.trycloudflare\.com`, and when a quick tunnel fails
+to be *created* cloudflared logs the API URL it could not reach — which matches. The scanner
+latched `announced`, wrote it to KV, and the Function would have forwarded visitor traffic to
+`api.trycloudflare.com`. It self-corrected only because that connector exited and the next one
+won the race; had it stayed up, that surface would have been permanently wrong with nothing
+throwing anywhere.
+
+This is the worst shape a bug takes on this path: a syntactically perfect origin URL pointing at
+the wrong service. No exception, no 530, no failed probe — the probe would have called it
+healthy, because `api.trycloudflare.com` answers.
+
+The pattern now requires the three-or-more hyphenated words a quick tunnel is always named with,
+which excludes the bare `api.` host by construction rather than by blocklist. Checked against
+both real hostnames and the exact error line above.
+
+**The same log is also the evidence that the drill-6 fix works, in both directions.** The uplink
+genuinely dropped for about four minutes: four rounds of
+`all 3 surfaces unreachable and the control probe failed too — this box is offline, not rotating`
+— the old guard's intended case, correctly held. The round after that reads
+`all 3 surfaces unreachable while the uplink is fine — the leases were reaped together`, and only
+then did it start counting. `admin` and `partner` recovered at 1/3 and reset; `public` reached
+3/3 and was rebuilt alone. That is the discriminator doing exactly the job it was added for, on
+real traffic, within an hour of being written.
