@@ -14,14 +14,14 @@ it and R24 has a live bypass to close, and the origin sits behind a public
 | Section | State |
 |---|---|
 | §1 Edge and transport (R1–R5) | **written** — R2/R3 are written answers on this path, see `docs/` |
-| §2 Connectivity (R6–R11) | R7/R9/R11 **written**, R7 verified against `cloudflared`; R6 needs `ufw` (root); R8 needs a named tunnel; R10 unavailable on this path |
+| §2 Connectivity (R6–R11) | R7/R9/R11 **written**; R7 is now a real ingress table in `deploy/cloudflared-private.yml`, not only an explanation. R6's firewall and R8's units are **written and staged** in `scripts/root-setup.sh`, pending one `sudo` run; R10 unavailable on this path |
 | §3 Identity and policy (R12–R16) | **live** — OTP IdP, both applications, Block above Allow verified at Cloudflare |
 | §4 Origin enforcement (R17–R24) | **live** — both R24 bypass routes closed with the origin's own refusals |
 | §5 Machine-to-machine (R25–R28) | **live** — a real service token reads the partner API end to end |
 | §6 Public surface (R29–R32) | **live** — rate limit, user-agent rule and Turnstile all firing at the edge |
 | §8 Infrastructure as code (R37–R40) | **applied and rebuilt** — 12 resources destroyed and recreated end to end in 291s, no dashboard click; see [`docs/40-rebuild.md`](docs/40-rebuild.md) |
-| §9 Ops and threat model (R41–R43) | R43 **written**; R42's runbooks written but not timed; R41 needs the audit-log pull |
-| §7 Operational access (R33–R36) | not started — needs `sshd` and root |
+| §9 Ops and threat model (R41–R43) | **done** — R41's audit-log pull, R43's threat model, and six timed drills, two of them unplanned incidents |
+| §7 Operational access (R33–R36) | **built, pending one `sudo` run** — named tunnel, /32 private route, WARP enrolment app, split-tunnel profile and both Gateway policies are in Terraform; see [`docs/07-operational-access.md`](docs/07-operational-access.md) |
 | §11 free-path plumbing | **deployed** — Function, edge signature and three quick tunnels live |
 
 **38 tests green** on Node 24, none of which need a Cloudflare account.
@@ -265,6 +265,7 @@ bottom.
 |---|---|
 | [`docs/01-edge-and-transport.md`](docs/01-edge-and-transport.md) | R1–R5. What Flexible TLS actually does to the connection; the HSTS-preload-and-lose-the-domain question; `/cdn-cgi/trace` in triage; whether the origin IP was ever published, and the production remedy when the answer is yes |
 | [`docs/02-connectivity.md`](docs/02-connectivity.md) | R6–R11. Why a missing ingress catch-all stops `cloudflared` from starting rather than producing a 404; credentials file vs connector token and which is worse to leak; 1033 vs 1016 vs origin 502, and what each accuses |
+| [`docs/07-operational-access.md`](docs/07-operational-access.md) | R33–R36. Why the two SSH clients R33 names need a zone and what replaces them; the /32 rather than the /24; `warp-routing` as the one line the section depends on; the split-tunnel exclude list that makes a correct build fail silently; and why the Gateway *block* rule is the requirement, not the allow |
 | [`docs/40-rebuild.md`](docs/40-rebuild.md) | R40. The destroy-and-rebuild, performed: what 12 destroyed resources looked like from outside, which six Cloudflare-issued identifiers changed underneath, and the 291-second measured rebuild |
 | [`docs/41-audit-logs.md`](docs/41-audit-logs.md) | R41. The audit log pulled as JSON — and why two of the three things R41 asks for are absent from it, permanently. Access logs identity events, not refusals |
 | [`docs/42-incident-runbooks.md`](docs/42-incident-runbooks.md) | R42. Four procedures, written before being timed. Drill 4 performed against the live system and timed; 1 and 2 blocked on an apply, and say so |
@@ -369,10 +370,15 @@ TTL and no client-IP restriction (this box is on a hotspot with a changing addre
 
 Honest ledger of what is still outstanding:
 
-- **§7 (R33–R36) is untouched.** `sshd` is inactive on the box and enabling it needs root, so
-  SSH through Access, the LAN-rule deletion and reboot, and WARP enrolment are all ahead.
+- **§7 (R33–R36) is built but not yet live.** All seven Cloudflare-side resources are in
+  `terraform/private-network.tf` and plan clean; the box-side work is staged in
+  `scripts/root-setup.sh`. Three things stand between here and done, and none of them is
+  design work: the API token needs **Zero Trust: Edit** added (Gateway rules and device
+  profiles both return 403 today), the apply has to run, and one `sudo` invocation installs
+  the units. R34's reboot is then a deliberate, confirmed step. The browser-rendered SSH
+  client R33 names is permanently unavailable without a zone, and `docs/07` says so.
 - **R6's firewall half.** No non-loopback listener exists and every surface binds `127.0.0.1`,
-  but `ufw default deny incoming` needs root and has not been set.
+  but `ufw default deny incoming` needs root. The rules are written in `root-setup.sh base`.
 - **R42: all four runnable drills are performed and timed, plus two unplanned ones.** 1
   (leaver) 67s; 2 (token rotation) **96s against a 60s target — missed**, for reasons written up
   rather than smoothed over; 4 (console down) 3s to diagnose and 14s to recover; 5 (unplanned,

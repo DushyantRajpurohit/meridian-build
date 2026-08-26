@@ -1,0 +1,41 @@
+# R8, the other half — the quick-tunnel supervisor that publishes the three public surfaces'
+# rotating hostnames to KV. Drills 5 and 6 are both incidents this unit would have shortened:
+# nothing crashed either time, but nothing restarted anything either, because there was no
+# supervisor of the supervisor.
+#
+# Installed by scripts/root-setup.sh to /etc/systemd/system/meridian-origins.service.
+#
+# This runs as the login user rather than a service account: it needs the repo, node via nvm,
+# and a .env that is 0600 and owned by that user. Moving it to a service account is the right
+# end state and is a bigger change than it looks — it is named in the ledger rather than
+# quietly skipped.
+
+[Unit]
+Description=Meridian quick-tunnel supervisor (publishes rotating origins to KV)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__USER__
+Group=__USER__
+WorkingDirectory=__REPO__
+
+# The supervisor loads .env itself via tsx --env-file, so no EnvironmentFile here and no
+# secret in this unit.
+ExecStart=__NODE__ __REPO__/node_modules/.bin/tsx --env-file=.env scripts/publish-origins.ts
+
+# The lock the supervisor takes lives in /tmp; a stale one after a hard kill is cleared by its
+# own signal-0 check, so no ExecStartPre cleanup is needed here (drill 6).
+Restart=always
+RestartSec=10s
+StartLimitIntervalSec=0
+
+# Kill the whole group: the supervisor spawns three cloudflared children, and stopping only
+# the parent leaves three orphaned connectors serving hostnames nothing points at — which is
+# drill 6's second fault, reproduced by systemd instead of by me.
+KillMode=control-group
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target

@@ -14,3 +14,5 @@ blocked_emails = [
 # Filled in after the Pages project exists; see README.
 admin_hostname   = "staff.meridian-clinic.pages.dev"
 partner_hostname = "api.meridian-clinic.pages.dev"
+
+operator_email = "you@example.com"

@@ -1,0 +1,52 @@
+# R8 — the connector as a managed service.
+#
+# The distinction this file exists to make: `cloudflared tunnel run` in a terminal is not a
+# deployment. It dies with the terminal, it dies with the SSH session, and — the case that
+# actually bites — it dies on reboot at 4am and nobody notices until the clinic opens.
+#
+# Installed by scripts/root-setup.sh to /etc/systemd/system/cloudflared-private.service.
+
+[Unit]
+Description=Meridian private-network connector (named tunnel, WARP routing)
+After=network-online.target
+Wants=network-online.target
+# Not Requires=: if the network comes up late, Restart=always retries anyway, and a hard
+# dependency here means a transient DHCP failure leaves the operator locked out of the box.
+
+[Service]
+Type=notify
+
+# R9 — the token arrives as an environment variable from a 0600 file owned by root. Never an
+# ExecStart argument: an argument is visible in `ps` to every user on the box for the life of
+# the process, and lands in shell history the first time someone runs it by hand. cloudflared
+# reads TUNNEL_TOKEN natively, so there is no reason to ever type it.
+EnvironmentFile=/etc/cloudflared/private.env
+
+ExecStart=/usr/local/bin/cloudflared --no-autoupdate --config /etc/cloudflared/config.yml tunnel run
+
+Restart=always
+RestartSec=5s
+# Without this, five fast failures inside 10s put the unit in `failed` and systemd stops
+# trying — the connector would stay down through exactly the flapping-network condition
+# Restart=always was chosen for.
+StartLimitIntervalSec=0
+
+User=cloudflared
+Group=cloudflared
+
+# The connector needs outbound network and nothing else on this box.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

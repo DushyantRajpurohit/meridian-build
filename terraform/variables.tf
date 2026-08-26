@@ -75,3 +75,30 @@ variable "partner_session_duration" {
   type        = string
   default     = "24h"
 }
+
+variable "operator_email" {
+  description = <<-EOT
+    R36 — the single identity allowed to enrol a device and reach the box's operations
+    address. Deliberately one address and not `staff_emails`: the requirement is "your
+    identity, not everyone enrolled in the team", and clinic staff reach the console with a
+    browser and a URL, never with a route into the machine.
+  EOT
+  type        = string
+}
+
+variable "private_host_ip" {
+  description = "R35 — the box's operations address, held on `lo` so it is never ARPed onto the LAN."
+  type        = string
+  default     = "10.99.0.1"
+}
+
+variable "private_host_cidr" {
+  description = <<-EOT
+    R35 — what the tunnel is authorised to forward to. A /32 rather than a /24: the route is
+    permission to forward, and everything inside it is reachable from the connector's network
+    namespace, which on this box would mean the LAN. One address is the honest size of what is
+    being exposed.
+  EOT
+  type        = string
+  default     = "10.99.0.1/32"
+}

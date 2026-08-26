@@ -52,3 +52,24 @@ output "partner_client_secret_2" {
   value     = cloudflare_zero_trust_access_service_token.partner_lab_2.client_secret
   sensitive = true
 }
+
+output "private_tunnel_id" {
+  description = "R8/R35 — the named tunnel the systemd connector runs. Not a secret."
+  value       = cloudflare_zero_trust_tunnel_cloudflared.private.id
+}
+
+output "private_tunnel_token" {
+  description = <<-EOT
+    R9 — the connector token. A secret, and the more dangerous of the two artefacts: it is one
+    line, it is designed to be pasted, and on a remotely-managed tunnel it also fetches the
+    ingress configuration. scripts/root-setup.sh reads it through this output into a 0600
+    EnvironmentFile and never onto a command line.
+  EOT
+  value       = data.cloudflare_zero_trust_tunnel_cloudflared_token.private.token
+  sensitive   = true
+}
+
+output "private_host_ip" {
+  description = "R35 — the address a WARP-enrolled operator reaches the box on."
+  value       = var.private_host_ip
+}

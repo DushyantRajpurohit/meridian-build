@@ -1,0 +1,40 @@
+# R7 — the ingress table, as a file rather than as an explanation.
+#
+# Installed to /etc/cloudflared/config.yml by scripts/root-setup.sh. The connector is
+# locally managed (terraform sets config_src = "local"), so this file is the configuration —
+# there is no dashboard copy of it to drift from.
+
+# Identifies which tunnel this connector serves. The credentials come from TUNNEL_TOKEN in the
+# unit's EnvironmentFile, never from this file and never from a command line (R9).
+tunnel: TUNNEL_ID_PLACEHOLDER
+
+# R35 — the line the whole of §7 depends on. Without it the private network route exists at
+# Cloudflare and the connector silently refuses to forward to it: WARP clients get a
+# connection that opens and then goes nowhere, which is a much worse failure to debug than a
+# refusal. There is no warning anywhere that this is missing.
+warp-routing:
+  enabled: true
+
+# R7 — the catch-all, and what happens without it.
+#
+# cloudflared validates this table at STARTUP and refuses to start if the last rule has a
+# hostname. Not a 404 at request time — the process exits with
+# "The last ingress rule must match all URLs (i.e. it should not have a hostname)". That is
+# the right behaviour and it surprises people: an ingress table is a routing table, a routing
+# table with no default is incomplete, and cloudflared would rather fail loudly at boot than
+# serve an unpredictable subset of requests.
+#
+# On this tunnel the catch-all is the ONLY rule, and that is deliberate. This connector exists
+# to carry TCP to one private IP; it serves no HTTP surface at all. Anything that arrives here
+# speaking HTTP has arrived somewhere it was not invited, and 404 is the honest answer. The
+# three public surfaces are served by Pages and the quick tunnels, and share nothing with this
+# path — including this connector's lifecycle, so a flapping web surface never restarts the
+# operator's way back into the box.
+ingress:
+  - service: http_status:404
+
+# Operational hygiene, not requirements:
+# - no-autoupdate is set in the unit, not here, so an upgrade is a deliberate act.
+# - metrics stays on loopback; it is unauthenticated and exposes tunnel internals.
+metrics: 127.0.0.1:20241
+loglevel: info
