@@ -47,7 +47,17 @@ RestartSec=5s
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
-ReadWritePaths=__REPO__
+# Quoted for the SAME reason as ExecStart above, which I wrote a warning about and then walked
+# straight past on this line. ReadWritePaths is a SPACE-SEPARATED LIST, so an unquoted repo
+# path containing a space becomes two paths, neither of which exists. systemd then refuses to
+# build the mount namespace at all:
+#
+#   Failed to set up mount namespacing: /home/dushyant/Documents/Ayush: No such file or directory
+#   Main process exited, code=exited, status=226/NAMESPACE
+#
+# The service never starts and the error never mentions the application. Any directive taking
+# a list of paths has this property; WorkingDirectory does not, because it takes exactly one.
+ReadWritePaths="__REPO__"
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true

@@ -390,3 +390,29 @@ is worth having and is a change to `src/`, not to a unit file.
 It repeats the two lessons the other units paid for: quoted paths in `ExecStart`, because this
 repository lives under a directory with a space in it, and `tsx/dist/cli.mjs` rather than
 `node_modules/.bin/tsx`, which is a shell shim.
+
+### The same bug, one directive lower
+
+`meridian-apps.service` failed on first boot with:
+
+```
+Failed to set up mount namespacing: /home/dushyant/Documents/Ayush: No such file or directory
+Main process exited, code=exited, status=226/NAMESPACE
+```
+
+`ReadWritePaths=` is a **space-separated list**, so the unquoted repo path became two paths,
+neither of which exists, and systemd refused to construct the mount namespace at all. The
+service never started, and the error names neither the application nor the setting that broke
+it — only a truncated path and `226/NAMESPACE`.
+
+This is the *third* appearance of the same root cause, and the second time after writing a
+comment warning about it: `ExecStart` in this very file is quoted, with a note explaining why.
+The generalisation I had drawn was too narrow — "quote `ExecStart`" — when the real rule is
+**every systemd directive that takes a list of paths splits on whitespace**. `WorkingDirectory`
+is safe precisely because it takes exactly one path and can therefore consume the whole line;
+`ReadWritePaths`, `ReadOnlyPaths`, `InaccessiblePaths` and `BindPaths` are not.
+
+The durable lesson is about the shape of the fix rather than the bug: patching the instance you
+were shown, when the cause is a property of a whole class of settings, leaves the rest of the
+class waiting. The audit that should have followed the first fix took one `grep` and would have
+found this before a reboot did.
