@@ -21,7 +21,7 @@ it and R24 has a live bypass to close, and the origin sits behind a public
 | §6 Public surface (R29–R32) | **live** — rate limit, user-agent rule and Turnstile all firing at the edge |
 | §8 Infrastructure as code (R37–R40) | **applied and rebuilt** — 12 resources destroyed and recreated end to end in 291s, no dashboard click; see [`docs/40-rebuild.md`](docs/40-rebuild.md) |
 | §9 Ops and threat model (R41–R43) | **done** — R41's audit-log pull, R43's threat model, and six timed drills, two of them unplanned incidents |
-| §7 Operational access (R33–R36) | **built, pending one `sudo` run** — named tunnel, /32 private route, WARP enrolment app, split-tunnel profile and both Gateway policies are in Terraform; see [`docs/07-operational-access.md`](docs/07-operational-access.md) |
+| §7 Operational access (R33–R36) | **Cloudflare side live, box side pending one `sudo` run** — named tunnel, /32 private route, WARP enrolment app, split-tunnel profile and both Gateway policies applied, plan clean; see [`docs/07-operational-access.md`](docs/07-operational-access.md) |
 | §11 free-path plumbing | **deployed** — Function, edge signature and three quick tunnels live |
 
 **38 tests green** on Node 24, none of which need a Cloudflare account.
@@ -370,13 +370,14 @@ TTL and no client-IP restriction (this box is on a hotspot with a changing addre
 
 Honest ledger of what is still outstanding:
 
-- **§7 (R33–R36) is built but not yet live.** All seven Cloudflare-side resources are in
-  `terraform/private-network.tf` and plan clean; the box-side work is staged in
-  `scripts/root-setup.sh`. Three things stand between here and done, and none of them is
-  design work: the API token needs **Zero Trust: Edit** added (Gateway rules and device
-  profiles both return 403 today), the apply has to run, and one `sudo` invocation installs
-  the units. R34's reboot is then a deliberate, confirmed step. The browser-rendered SSH
-  client R33 names is permanently unavailable without a zone, and `docs/07` says so.
+- **§7 (R33–R36): the Cloudflare half is live, the box half is not.** All seven resources —
+  named tunnel, `10.99.0.1/32` route, WARP enrolment application and policy, split-tunnel
+  profile, and both Gateway L4 policies — are applied and `terraform plan` reports *No
+  changes*. What remains is one `sudo bash scripts/root-setup.sh base` to install the
+  connector unit, sshd, WARP and the loopback address, then a WARP registration, then
+  `verify`. R34's reboot (`lockdown`) is a deliberate, confirmed step after `ssh
+  dushyant@10.99.0.1` has worked once. The browser-rendered SSH client R33 names is
+  permanently unavailable without a zone, and `docs/07` says so.
 - **R6's firewall half.** No non-loopback listener exists and every surface binds `127.0.0.1`,
   but `ufw default deny incoming` needs root. The rules are written in `root-setup.sh base`.
 - **R42: all four runnable drills are performed and timed, plus two unplanned ones.** 1
@@ -393,7 +394,12 @@ Honest ledger of what is still outstanding:
   quick tunnel is always named with so cloudflared's own `api.trycloudflare.com` cannot be
   published as an origin — drills 5 and 6 are the incidents that proved each of those needed —
   but a probe is not `Restart=always`, and nothing here starts at boot.
-- **The reviewer's test identity and the recording** are outstanding.
+- **R10 was unavailable and now is not.** The claim above that two connectors cannot serve one
+  tunnel is true of a *quick* tunnel and was written when this build had only those. §7 created
+  a named tunnel with a credentials file, so a second `cloudflared` replica against
+  `meridian-private` is now possible. It is not done, and the sentence stays here rather than
+  being quietly deleted.
+- **The screen recording** is outstanding.
 
 The staff Allow list is six Gmail plus-addresses that all deliver to one inbox. That proves the
 policy scopes per-identity; it does not prove six independent people exist. Under one-time PIN
