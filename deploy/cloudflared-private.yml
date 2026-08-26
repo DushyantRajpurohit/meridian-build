@@ -35,6 +35,8 @@ ingress:
 
 # Operational hygiene, not requirements:
 # - no-autoupdate is set in the unit, not here, so an upgrade is a deliberate act.
-# - metrics stays on loopback; it is unauthenticated and exposes tunnel internals.
-metrics: 127.0.0.1:20241
+# - metrics is NOT set here. This file is shared by both connector instances (R10), and two
+#   processes cannot bind one port; the unit passes --metrics 127.0.0.1:2024%i so each gets
+#   its own. It stays on loopback either way — the endpoint is unauthenticated and exposes
+#   tunnel internals.
 loglevel: info

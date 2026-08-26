@@ -1,13 +1,20 @@
-# R8 — the connector as a managed service.
+# R8 and R10 — the connector as a managed service, and as more than one of them.
 #
 # The distinction this file exists to make: `cloudflared tunnel run` in a terminal is not a
 # deployment. It dies with the terminal, it dies with the SSH session, and — the case that
 # actually bites — it dies on reboot at 4am and nobody notices until the clinic opens.
 #
-# Installed by scripts/root-setup.sh to /etc/systemd/system/cloudflared-private.service.
+# A TEMPLATE unit (note the @). Instantiated as cloudflared-private@1 and @2, which is R10:
+# two connectors serving one named tunnel. Both read the same credentials and the same ingress
+# table, register independently with the Cloudflare edge, and appear as two connectors on the
+# tunnel — traffic survives either one being stopped, upgraded or killed. This is the exercise
+# a quick tunnel cannot do at all: a quick tunnel has no credentials file and no stable name,
+# so a second process is a second tunnel, not a second connector.
+#
+# Installed by scripts/root-setup.sh to /etc/systemd/system/cloudflared-private@.service.
 
 [Unit]
-Description=Meridian private-network connector (named tunnel, WARP routing)
+Description=Meridian private-network connector %i (named tunnel, WARP routing)
 After=network-online.target
 Wants=network-online.target
 # Not Requires=: if the network comes up late, Restart=always retries anyway, and a hard
@@ -31,7 +38,11 @@ Type=notify
 # reads TUNNEL_TOKEN natively, so there is no reason to ever type it.
 EnvironmentFile=/etc/cloudflared/private.env
 
-ExecStart=/usr/local/bin/cloudflared --no-autoupdate --config /etc/cloudflared/config.yml tunnel run
+# --metrics per instance, because two processes cannot bind one port and the failure is
+# obscure: the second connector exits at startup complaining about an address in use, which
+# reads as a tunnel problem rather than an observability one. %i is the instance number, so
+# @1 gets 20241 and @2 gets 20242.
+ExecStart=/usr/local/bin/cloudflared --no-autoupdate --config /etc/cloudflared/config.yml --metrics 127.0.0.1:2024%i tunnel run
 
 Restart=always
 RestartSec=5s

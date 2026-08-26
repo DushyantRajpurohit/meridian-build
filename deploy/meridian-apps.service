@@ -1,0 +1,59 @@
+# R8, the part that was missing — the three origin surfaces themselves.
+#
+# The connector and the tunnel supervisor were managed services while the applications they
+# carry traffic to were still started by hand in a terminal. That is the wrong half to
+# automate: a reboot brought back a healthy tunnel pointing at nothing, which is a worse
+# failure than a reboot that brings back nothing at all, because every layer reports success
+# and the 502 comes from the innermost one.
+#
+# One process serves all three surfaces (src/index.ts binds 3000/3001/3002), so this is one
+# unit rather than three. Splitting them would let the staff console restart without the
+# booking page noticing, which is worth having and is a change to src/, not to this file.
+#
+# Installed by scripts/root-setup.sh to /etc/systemd/system/meridian-apps.service.
+
+[Unit]
+Description=Meridian origin surfaces (public 3000, admin 3001, partner 3002)
+After=network-online.target
+Wants=network-online.target
+
+# [Unit], not [Service] — systemd reads the start rate limiter here and silently ignores it
+# anywhere else. Without it, five fast failures in ten seconds park the unit in `failed` and
+# Restart=always stops meaning anything.
+StartLimitIntervalSec=0
+StartLimitBurst=0
+
+[Service]
+Type=simple
+User=__USER__
+Group=__USER__
+WorkingDirectory=__REPO__
+
+# Quoted, because this repository lives under a path containing a space and systemd splits
+# ExecStart on whitespace. And tsx's real entrypoint rather than node_modules/.bin/tsx, which
+# is npm's /bin/sh shim: handing that to node makes node parse shell as JavaScript, and the
+# shim itself would need node on a PATH systemd does not provide.
+ExecStart="__NODE__" "__REPO__/node_modules/tsx/dist/cli.mjs" --env-file=.env src/index.ts
+
+# The surfaces read their own .env (0600, owned by the invoking user), so no EnvironmentFile
+# and no secret in this unit — same reasoning as R9 for the connector token.
+
+Restart=always
+RestartSec=5s
+
+# R6 — these bind 127.0.0.1 in the application, and this is the second line saying so. If a
+# future change ever binds 0.0.0.0 by accident, the listener is still not reachable from the
+# LAN, because the address it would answer on is not routable to this namespace.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=__REPO__
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

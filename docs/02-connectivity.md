@@ -338,3 +338,55 @@ where their exit status is discarded. Making the check *better* is what exposed 
 for the first time. Both assignments now end in `|| true`, and the loop is tested against a
 genuinely failing unit rather than only against healthy ones — which is the actual lesson, since
 every earlier run of this stage had three healthy units and could not have caught it.
+
+## R10 — two connectors on one tunnel, once there was a tunnel to put them on
+
+This was listed as unavailable for most of the build, and the reason was correct at the time: a
+**quick** tunnel has no credentials file and no stable name, so a second `cloudflared` process
+is a second *tunnel* with a second random hostname, not a second connector on the same one.
+Nothing about that is a failover exercise.
+
+§7 changed the premise. Building the private network required a **named** tunnel
+(`meridian-private`), which has exactly what a quick tunnel lacks: a stable identity and a
+credentials token that more than one process may present. So R10 became available as a
+side-effect of a different requirement, and the honest thing was to do it rather than keep
+citing the old constraint.
+
+`cloudflared-private.service` is now `cloudflared-private@.service`, a systemd **template**,
+instantiated as `@1` and `@2`. Both read the same `/etc/cloudflared/config.yml` and the same
+`TUNNEL_TOKEN`, and register independently with the edge.
+
+**The one thing that is not shared is the metrics port.** Two processes cannot bind one, and
+the failure is misleading: the second instance exits at startup complaining about an address
+already in use, which reads as a tunnel or credentials problem when it is an observability
+one. `metrics:` came out of the shared config file and the unit passes
+`--metrics 127.0.0.1:2024%i`, so `@1` gets 20241 and `@2` gets 20242.
+
+That also makes the proof local and token-free. Each connector's own endpoint reports the edge
+connections **it** holds:
+
+```
+$ curl -s 127.0.0.1:20241/metrics | grep ha_connections
+cloudflared_tunnel_ha_connections 4
+```
+
+Two processes each holding their own set is failover. One process holding eight is not, and a
+check that only counted connections at the account would not tell them apart. `verify` reads
+both ports and says which. The failover test is then one command —
+`systemctl stop cloudflared-private@1` — with `@2` carrying the tunnel.
+
+## R8 — the applications, which were the half still started by hand
+
+The connector and the tunnel supervisor were managed services while the three surfaces they
+carry traffic *to* were still `pnpm start` in a terminal. That is the wrong half to automate.
+A reboot would have restored a healthy tunnel pointing at nothing — and that is worse than
+restoring nothing at all, because every layer reports success and the only complaint comes
+from the innermost one, as a 502 with no owner.
+
+`meridian-apps.service` closes it. One unit, because `src/index.ts` binds all three ports in
+one process; splitting them so the staff console can restart without the booking page noticing
+is worth having and is a change to `src/`, not to a unit file.
+
+It repeats the two lessons the other units paid for: quoted paths in `ExecStart`, because this
+repository lives under a directory with a space in it, and `tsx/dist/cli.mjs` rather than
+`node_modules/.bin/tsx`, which is a shell shim.

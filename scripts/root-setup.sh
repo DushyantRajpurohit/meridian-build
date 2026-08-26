@@ -153,7 +153,7 @@ stage_base() {
 [Unit]
 Description=Meridian operations address on loopback (R35)
 After=network-pre.target
-Before=cloudflared-private.service
+Before=cloudflared-private@1.service cloudflared-private@2.service
 
 [Service]
 Type=oneshot
@@ -199,8 +199,19 @@ UNIT
   chmod 0600 /etc/cloudflared/private.env
   note "connector token -> /etc/cloudflared/private.env (0600, $(wc -c < /etc/cloudflared/private.env) bytes)"
 
-  install -o root -g root -m 0644 "${REPO}/deploy/cloudflared-private.service" \
-    /etc/systemd/system/cloudflared-private.service
+  # R10 — a TEMPLATE unit, instantiated twice. Two connectors on one named tunnel is the
+  # failover exercise a quick tunnel structurally cannot do: with no credentials file and no
+  # stable name, a second quick-tunnel process is a second tunnel, not a second connector.
+  install -o root -g root -m 0644 "${REPO}/deploy/cloudflared-private@.service" \
+    /etc/systemd/system/cloudflared-private@.service
+
+  # Migrate off the single-instance unit if a previous run of this script installed it.
+  # Leaving it enabled means three connectors, one of them fighting @1 for the metrics port.
+  if [[ -f /etc/systemd/system/cloudflared-private.service ]]; then
+    systemctl disable --now cloudflared-private.service >/dev/null 2>&1 || true
+    rm -f /etc/systemd/system/cloudflared-private.service
+    note "retired the single-instance cloudflared-private.service"
+  fi
 
   head_ "R8 — the quick-tunnel supervisor as a managed service"
   # `command -v node` is not good enough here, and the way it fails is quiet. Under runuser it
@@ -221,10 +232,12 @@ UNIT
   NODE_MAJOR="$("${NODE_BIN}" --version 2>/dev/null | sed -E 's/^v([0-9]+).*/\1/')"
   [[ "${NODE_MAJOR}" =~ ^[0-9]+$ ]] || die "could not read a version out of ${NODE_BIN}"
   (( NODE_MAJOR >= 22 )) || die "${NODE_BIN} is Node ${NODE_MAJOR}; this repo needs >= 22 (.nvmrc pins 24). Install it for ${RUN_USER}:  nvm install && nvm use"
-  sed -e "s|__USER__|${RUN_USER}|g" -e "s|__REPO__|${REPO}|g" -e "s|__NODE__|${NODE_BIN}|g" \
-    "${REPO}/deploy/meridian-origins.service" > /etc/systemd/system/meridian-origins.service
-  chmod 0644 /etc/systemd/system/meridian-origins.service
-  note "meridian-origins.service written (node ${NODE_BIN})"
+  for unit in meridian-origins meridian-apps; do
+    sed -e "s|__USER__|${RUN_USER}|g" -e "s|__REPO__|${REPO}|g" -e "s|__NODE__|${NODE_BIN}|g" \
+      "${REPO}/deploy/${unit}.service" > "/etc/systemd/system/${unit}.service"
+    chmod 0644 "/etc/systemd/system/${unit}.service"
+    note "${unit}.service written (node ${NODE_BIN})"
+  done
 
   # Any hand-started supervisor has to go first, or the unit's copy loses the lock and exits 3
   # — which is the lock doing its job, and would read as a broken unit.
@@ -232,10 +245,19 @@ UNIT
   sleep 2
   rm -f /tmp/meridian-publish-origins.lock
 
+  # Any hand-started origin process has to go too, for the same reason: the unit's copy would
+  # find 3000/3001/3002 already bound and exit, which reads as a broken unit rather than as a
+  # duplicate.
+  pkill -u "${RUN_USER}" -f 'src/index\.ts' 2>/dev/null || true
+  sleep 1
+
   systemctl daemon-reload
-  systemctl enable --now cloudflared-private.service
+  systemctl enable --now meridian-apps.service
+  for i in 1 2; do
+    systemctl enable --now "cloudflared-private@${i}.service"
+  done
   systemctl enable --now meridian-origins.service
-  note "both units enabled and started"
+  note "meridian-apps, cloudflared-private@1, cloudflared-private@2 and meridian-origins started"
 
   head_ "R6 — default-deny inbound"
   ufw --force default deny incoming  >/dev/null
@@ -354,7 +376,7 @@ stage_verify() {
   # The first version of this check printed the word and moved on, and meridian-origins was
   # read as merely slow to start for 206 restarts. If systemd has restarted a unit more than
   # a couple of times, say so and quote the reason.
-  for u in cloudflared-private meridian-origins meridian-ops-address; do
+  for u in meridian-apps cloudflared-private@1 cloudflared-private@2 meridian-origins meridian-ops-address; do
     local st en n
     # `|| true` on both, and it is not defensive noise. `systemctl is-active` exits 3 for
     # `activating`, and under `set -e` a standalone assignment from a failing command
@@ -386,7 +408,33 @@ stage_verify() {
   fi
 
   head_ "connector"
-  systemctl status cloudflared-private --no-pager -n 6 2>&1 | tail -8
+  systemctl status cloudflared-private@1 --no-pager -n 6 2>&1 | tail -8
+
+  head_ "R10 — two connectors, one tunnel"
+  # Read each connector's own metrics endpoint rather than asking Cloudflare. No token is
+  # involved, it works with the account unreachable, and `cloudflared_tunnel_ha_connections`
+  # is the connector reporting how many edge connections IT holds — which is the thing R10 is
+  # actually about. Two processes each holding their own set is failover; one process holding
+  # eight is not.
+  local total=0 up=0
+  for i in 1 2; do
+    local n
+    n="$(curl -s --max-time 5 "http://127.0.0.1:2024${i}/metrics" 2>/dev/null \
+         | awk '/^cloudflared_tunnel_ha_connections /{print $2; exit}')"
+    if [[ -n "${n}" ]]; then
+      echo "  connector @${i}: ${n} edge connections"
+      up=$((up + 1))
+      total=$((total + n))
+    else
+      echo "  connector @${i}: FINDING — no metrics on 127.0.0.1:2024${i}, it is not running"
+    fi
+  done
+  if (( up >= 2 )); then
+    echo "  R10 satisfied: ${up} independent connectors, ${total} edge connections between them."
+    echo "  Failover test:  sudo systemctl stop cloudflared-private@1   # @2 keeps the tunnel up"
+  else
+    echo "  FINDING: R10 needs two connectors and only ${up} answered."
+  fi
 }
 
 # ---------------------------------------------------------------------------------------

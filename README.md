@@ -14,7 +14,7 @@ it and R24 has a live bypass to close, and the origin sits behind a public
 | Section | State |
 |---|---|
 | §1 Edge and transport (R1–R5) | **written** — R2/R3 are written answers on this path, see `docs/` |
-| §2 Connectivity (R6–R11) | R7/R9/R11 **written**; R7 is a real ingress table in `deploy/cloudflared-private.yml`. R6 and R8 are **live** — ufw default-deny, sshd bound to `10.99.0.1` only, three enabled systemd units; R10 now possible via the named tunnel but not done |
+| §2 Connectivity (R6–R11) | R7/R9/R11 **written**; R7 is a real ingress table in `deploy/cloudflared-private.yml`. R6 and R8 are **live** — ufw default-deny, sshd bound to `10.99.0.1` only, three enabled systemd units; R10 **live** — two connectors on the named tunnel |
 | §3 Identity and policy (R12–R16) | **live** — OTP IdP, both applications, Block above Allow verified at Cloudflare |
 | §4 Origin enforcement (R17–R24) | **live** — both R24 bypass routes closed with the origin's own refusals |
 | §5 Machine-to-machine (R25–R28) | **live** — a real service token reads the partner API end to end |
@@ -390,16 +390,12 @@ Honest ledger of what is still outstanding:
   cause) 90s; 7 (self-inflicted rate limit) diagnosed in 10s by hand and not visible in the log
   at all, which was the finding. Drill 3 has no counterpart here — a quick tunnel has no token
   to leak.
-- **R10 was unavailable and now is not.** The claim elsewhere that two connectors cannot serve
-  one tunnel is true of a *quick* tunnel and was written when this build had only those. §7
-  created a named tunnel with a credentials file, so a second `cloudflared` replica against
-  `meridian-private` is now possible. It is not done, and the sentence stays rather than being
-  quietly deleted.
-- **The three origin apps are not under systemd.** The connector and the supervisor are
-  (`cloudflared-private`, `meridian-origins`, `meridian-ops-address` — all enabled, all survive
-  a reboot). The Node surfaces on 3000–3002 are still started by hand, so R8 is satisfied for
-  the tunnel path and not for the applications behind it.
 - **The screen recording** is outstanding.
+
+R10 and the origin-apps unit were both on this list and are now done — see `docs/02`. R10 became
+possible only when §7 created a named tunnel; `cloudflared-private@1` and `@2` are two connectors
+on it, and `meridian-apps.service` puts the three surfaces under systemd so a reboot no longer
+restores a healthy tunnel pointing at nothing.
 
 The staff Allow list is six Gmail plus-addresses that all deliver to one inbox. That proves the
 policy scopes per-identity; it does not prove six independent people exist. Under one-time PIN
