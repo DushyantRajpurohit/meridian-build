@@ -193,6 +193,66 @@ What still cannot be covered locally: §2, §7, §8 and §9 all need an account.
 - **R10 is not available on this path.** A quick tunnel has no credentials file and no ingress
   table, so two connectors cannot serve one tunnel. That is a real cost of the free route.
 
+
+## Live (§3, §5, §6 proven against Cloudflare)
+
+Deployed and verified end to end. Every line below was run against the real system, not the
+rehearsal.
+
+| Hostname | Access bound? | Result | Requirement |
+|---|---|---|---|
+| `staff.meridian-clinic.pages.dev` | **yes** | 302 to `dushyant-singh.cloudflareaccess.com`, `kid` == `ACCESS_AUD_ADMIN` | R13 |
+| `api.meridian-clinic.pages.dev` | **yes** (service tokens only) | 403 with no redirect — a `non_identity` policy has no login flow | R25 |
+| `meridian-clinic.pages.dev` | **no** | serves the public page; `/admin` returns **403 `no_token`** from the origin | R16, R24 |
+| `<random>.trycloudflare.com` ×3 | n/a | **403 `edge_nonce_missing`** | R24 |
+
+```
+  REF    EXP  GOT  BODY / REASON                          CHECK
+  R1     200  200  <!doctype html>…                       public booking page
+  R24    403  403  {"error":"forbidden","reason":"no_token"}   canonical host is not Access-bound
+  R13    302  302  302 to the team domain                 Access gates the console at the edge
+  R25    403  403  Access denial page                     partner API, no service token
+  R26    200  200  {"results":[{"id":"lr-001",…           service token reads the partner API
+  R24    403  403  {"error":"forbidden","reason":"edge_nonce_missing"}  straight to the origin
+  R21    403  403  {"error":"forbidden","reason":"edge_nonce_missing"}  forged identity header alone
+  R30    403  403  {"error":"no_user_agent"}              no user agent
+  R31    400  400  {"error":"turnstile_failed"}           junk Turnstile token, live siteverify
+  R29    429  429  {"error":"too_many_requests"}          6th booking from one device
+```
+
+**R26 is the whole machine path in one request:** service token → Access → Pages Function →
+HMAC-signed hop → quick tunnel → origin → JWT verified against the live team JWKS → 200.
+
+### Three things that did not go to plan, recorded rather than tidied away
+
+**Pages binds secrets at deployment time.** Setting `EDGE_HMAC_SECRET` after deploying left the
+running Function with an empty key, and it threw `DataError: Imported HMAC key length (0)` —
+surfacing as a bare `error code: 1101` with no clue in it. A redeploy fixed it. The lesson is
+ordering: a Pages secret is not live configuration, it is baked into the next deployment.
+
+**`staff.` and `api.` are preview aliases, and Pages only serves those for branches that have a
+deployment.** Access was bound to both hostnames and denied unauthenticated requests correctly,
+so the edge looked healthy — but past Access there was no deployment, and an authenticated
+service token got a Cloudflare 404. Deploying `--branch staff` and `--branch api` created the
+aliases. A hostname can be Access-protected and serve nothing; the 403 proves the policy, not
+the application.
+
+**R29's counter is eventually consistent, and it showed.** Bookings 6 and 7 were correctly
+refused with 429; booking 8 was allowed through again. That is KV converging, not a coding
+error, and it is the limitation already written into `_lib/ratelimit.ts` and the threat model —
+observed live rather than merely predicted. The limiter raises the cost of abuse; it does not
+impose a hard ceiling.
+
+### R28, precisely
+
+A service token presented to the staff console is refused — but by **Access at the edge**, with
+a 302 to the login flow, because no `non_identity` policy is attached to that application. The
+request never reaches the origin, so the origin's own
+`service_principal_on_human_route` refusal cannot be demonstrated in production. It is proven
+in the test suite instead, where the harness mints a service token *for the staff console's own
+audience* so that `aud` cannot be what refuses it. Both layers refuse; only one of them can be
+shown live, and it is the outer one.
+
 ## Written answers
 
 Several requirements ask for an explanation rather than a running system, and on the no-domain
