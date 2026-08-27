@@ -81,6 +81,32 @@ const failures = new Map<string, number>()
 // Its only job is to tell "this box is offline" apart from "every lease was reaped at once".
 const UPLINK_PROBE_URL = 'https://cloudflare.com/cdn-cgi/trace'
 
+// Whether each connector currently believes it is connected, read out of cloudflared's own
+// log. Not a nicety: it separates the only two reasons a published hostname stops answering,
+// and they want opposite responses.
+//
+//   connector DOWN  — the lease was reaped or the process lost its connections. The hostname
+//                     is gone with it, and rebuilding is the fix.
+//   connector UP    — cloudflared registered, reports no error, and is holding a healthy
+//                     connection, but the hostname still does not route to it. Cloudflare has
+//                     accepted the connector and declined to publish the name.
+//
+// The second is what a rate-limited address looks like after the 429s stop: creation succeeds,
+// registration succeeds, routing silently does not happen. Rebuilding is not merely useless
+// there, it is the thing making it worse — every rotation asks for another quick tunnel from
+// an address already being refused. Verified by hand: a connector left running for 90 seconds
+// with zero errors in its log served 404 on its own hostname the whole time.
+const CONNECTED = /Registered tunnel connection/
+const DISCONNECTED = /Connection terminated|no more connections active|Serve tunnel error/
+const connected = new Map<string, boolean>()
+
+// How long to leave a refused surface alone, growing each time, so that a service-side refusal
+// is waited out instead of hammered. Capped, because a surface nobody retries never recovers.
+const REFUSAL_BASE_MS = 5 * 60_000
+const REFUSAL_MAX_MS = 30 * 60_000
+const refusals = new Map<string, number>()
+const quietUntil = new Map<string, number>()
+
 // Exactly one supervisor may own these three surfaces. Two of them publish to the same three
 // KV keys, so the Function follows whichever wrote last while six connectors run and the
 // other three hostnames are orphaned — live processes serving a URL nothing points at. I ran
@@ -104,6 +130,7 @@ function start(name: string, port: number): void {
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   children.set(name, child)
+  connected.set(name, false)
 
   let announced = false
   const scan = (chunk: Buffer): void => {
@@ -117,6 +144,9 @@ function start(name: string, port: number): void {
       if (trimmed !== '') tail.push(trimmed)
     }
     tails.set(name, tail.slice(-TAIL_LINES))
+
+    if (CONNECTED.test(text)) connected.set(name, true)
+    if (DISCONNECTED.test(text)) connected.set(name, false)
 
     if (announced) return
     const found = QUICK_TUNNEL_URL.exec(text)
@@ -199,7 +229,10 @@ function jitter(ms: number): number {
 async function probeAll(): Promise<void> {
   if (stopping) return
 
-  const live = SURFACES.filter((surface) => published.has(surface.name))
+  const now = Date.now()
+  const live = SURFACES.filter(
+    (surface) => published.has(surface.name) && (quietUntil.get(surface.name) ?? 0) <= now,
+  )
   if (live.length === 0) return
 
   const results = await Promise.all(
@@ -237,6 +270,10 @@ async function probeAll(): Promise<void> {
   for (const { surface, ok } of results) {
     if (ok) {
       failures.set(surface.name, 0)
+      // A surface that is answering again has not been refused; forget the escalation so the
+      // next genuine outage starts from a short wait rather than half an hour.
+      refusals.delete(surface.name)
+      quietUntil.delete(surface.name)
       continue
     }
 
@@ -245,8 +282,21 @@ async function probeAll(): Promise<void> {
     console.error(`[${surface.name}] probe failed (${String(count)}/${String(FAILURES_BEFORE_RESTART)})`)
     if (count < FAILURES_BEFORE_RESTART) continue
 
-    console.error(`[${surface.name}] hostname is gone, rebuilding the connector`)
     failures.set(surface.name, 0)
+
+    // The connector is up, error-free, and holding a registered connection — and its hostname
+    // still will not answer. Nothing about tearing this down and asking for another one
+    // addresses that, and asking is exactly what an address being refused should stop doing.
+    if (connected.get(surface.name) === true) {
+      const n = (refusals.get(surface.name) ?? 0) + 1
+      refusals.set(surface.name, n)
+      const wait = jitter(Math.min(REFUSAL_BASE_MS * 2 ** (n - 1), REFUSAL_MAX_MS))
+      quietUntil.set(surface.name, Date.now() + wait)
+      console.error(`[${surface.name}] connector is registered and healthy but the hostname does not route to it — Cloudflare is refusing to publish it, and rotating would only ask again. Holding this surface for ${String(Math.round(wait / 60_000))}m (refusal ${String(n)}).`)
+      continue
+    }
+
+    console.error(`[${surface.name}] hostname is gone and the connector is down, rebuilding it`)
     // Killing it is the restart: the exit handler owns respawning and republishing, so
     // there is exactly one code path that starts a tunnel.
     children.get(surface.name)?.kill('SIGTERM')

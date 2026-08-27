@@ -455,3 +455,49 @@ service. On a developer laptop that is fine. On the box, the documented command 
 A rehearsal that requires taking production down in order to run is a rehearsal nobody runs.
 It now uses 3300-3302; nothing outside the process talks to them, so the numbers only ever
 needed to be free.
+
+## The connector Cloudflare accepted and would not publish
+
+After the origin surfaces came back stamping their header, the supervisor started doing
+exactly what it was rewritten to do: it noticed the published hostnames were not answering and
+rotated them. And rotated them. And rotated them.
+
+The tunnels were not failing. Run one by hand and it says:
+
+```
+INF Registered tunnel connection connIndex=0 connection=1ca41441-… location=del06 protocol=quic
+```
+
+No error after it, for as long as you care to watch. Every connectivity pre-check passes. And
+the hostname it printed thirty seconds earlier returns a zero-length `404` — the same answer a
+reaped lease gives, because it is the same answer: Cloudflare does not recognise the name.
+
+So the connector is registered and healthy and the name does not route to it. Ninety seconds
+of a completely silent log while `curl` got `404` every fifteen seconds, over both `quic` and
+`http2`, ruled out the protocol and ruled out the box. The Cloudflare status page reported no
+Tunnel or Zero Trust incident. What is left is this address: creation succeeds, registration
+succeeds, and publishing the hostname quietly does not happen. It is what the 1015 throttle
+earned earlier looks like once it stops returning 429s.
+
+**The part that matters.** The supervisor's response to a hostname that will not answer was to
+tear the connector down and ask for another quick tunnel. Against a reaped lease that is
+correct and it is the whole reason the probe exists. Against a refusal it is worse than doing
+nothing, because the request it makes is the request being refused — the recovery mechanism
+was feeding the condition it was recovering from, on a two-minute cycle, exactly as the crash
+loop had done at three seconds.
+
+The two cases are trivial to separate and I had the evidence to do it in the log already:
+
+* connector **down** — reaped or dropped. Rebuild. This is what the probe was written for.
+* connector **up**, no errors, hostname still dead — refused. Rebuilding asks again.
+
+The supervisor now reads `Registered tunnel connection` and `Connection terminated` out of
+cloudflared's own output, and on the second case it holds the surface for five minutes,
+doubling to thirty, instead of rotating. It says so in the log, in those words, so the next
+person does not have to rediscover it. A surface that answers again clears the escalation.
+
+**A note on where this leaves §11.** The rotating-hostname exercise still works and is still
+correct; the mechanism is sound and was demonstrated end to end before this. What is currently
+unavailable is Cloudflare's willingness to hand this address a working quick tunnel, which is
+a consequence of the crash loop in Drill 7 rather than a defect in what is written here. It
+expires. Nothing about the design changes when it does.
