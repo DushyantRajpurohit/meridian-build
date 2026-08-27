@@ -416,3 +416,42 @@ The durable lesson is about the shape of the fix rather than the bug: patching t
 were shown, when the cause is a property of a whole class of settings, leaves the rest of the
 class waiting. The audit that should have followed the first fix took one `grep` and would have
 found this before a reboot did.
+
+## The two hostnames that were still running yesterday's code
+
+`wrangler pages deploy` deploys the *current git branch*. The project's production branch is
+`main`, so a plain deploy updates `meridian-clinic.pages.dev` and nothing else.
+
+`staff.` and `api.` are not DNS records or aliases of production. They are **branch
+deployments** — `<branch>.<project>.pages.dev` — which is how a project with no zone gets
+three hostnames, and why Access can be bound to two of them without touching the third. Each
+one carries its own copy of the Function, frozen at whatever was deployed to that branch.
+
+So after fixing the Function and deploying, the canonical hostname had the fix and the two
+Access-protected hostnames did not. The partner API kept serving the reaped-lease 404 that the
+fix exists to catch, through a code path I had just corrected, and the correction was real —
+it was simply somewhere else.
+
+The deploy is three commands, not one:
+
+```
+pnpm pages:deploy                                     # main -> meridian-clinic.pages.dev
+cd pages && wrangler pages deploy --branch staff      # -> staff.meridian-clinic.pages.dev
+cd pages && wrangler pages deploy --branch api        # -> api.meridian-clinic.pages.dev
+```
+
+Worth stating plainly: a deployment model where the same code lives in three places and one
+command updates one of them will eventually skew, and the only reason it did not skew silently
+here is that the missing piece happened to be the thing being tested that afternoon. On a zone
+this problem does not exist — one hostname, one deployment, Access bound to paths.
+
+## The rehearsal that could not run on the box it rehearses
+
+`pnpm rehearse` stands up its own copies of all three surfaces to drive real HTTP through the
+real middleware. It bound 3000/3001/3002 — the ports `meridian-apps` already owns as a
+service. On a developer laptop that is fine. On the box, the documented command died with
+`EADDRINUSE`, and the fix was to stop the running service, which needs root.
+
+A rehearsal that requires taking production down in order to run is a rehearsal nobody runs.
+It now uses 3300-3302; nothing outside the process talks to them, so the numbers only ever
+needed to be free.

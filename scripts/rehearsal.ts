@@ -25,6 +25,19 @@ import { startLocalEdge } from './local-edge'
  *   pnpm tsx scripts/rehearsal.ts --serve   leave it running and print tokens to curl with
  */
 
+/**
+ * Deliberately not 3000/3001/3002.
+ *
+ * The rehearsal stands up its own copies of all three surfaces, and on a box where
+ * meridian-apps is running as a service those ports are taken — so the documented
+ * `pnpm rehearse` died with EADDRINUSE on the one machine it most needs to run on, and
+ * fixing it meant stopping the service, which needs root. A rehearsal that requires taking
+ * production down to run is a rehearsal nobody runs.
+ *
+ * Nothing outside this process talks to these, so the numbers only need to be free.
+ */
+const REHEARSAL_PORTS = { public: 3300, admin: 3301, partner: 3302 } as const
+
 const JWKS_PORT = 8790
 const ISSUER = `http://127.0.0.1:${JWKS_PORT}`
 const AUD_ADMIN = 'admin-application-audience-tag-0000000000000000000000000000'
@@ -62,13 +75,13 @@ const config: MeridianConfig = {
   turnstileSecret: 'rehearsal-turnstile-secret-that-cloudflare-will-reject',
   turnstileSiteKey: '1x00000000000000000000AA',
   bindHost: '127.0.0.1',
-  ports: { public: 3000, admin: 3001, partner: 3002 },
+  ports: { ...REHEARSAL_PORTS },
 }
 
 const apps = [
-  { name: 'public', port: 3000, app: createPublicApp(config) },
-  { name: 'admin', port: 3001, app: createAdminApp(config) },
-  { name: 'partner', port: 3002, app: createPartnerApp(config) },
+  { name: 'public', port: REHEARSAL_PORTS.public, app: createPublicApp(config) },
+  { name: 'admin', port: REHEARSAL_PORTS.admin, app: createAdminApp(config) },
+  { name: 'partner', port: REHEARSAL_PORTS.partner, app: createPartnerApp(config) },
 ]
 for (const { app, port } of apps) {
   await new Promise<void>((resolve) => {
@@ -76,9 +89,9 @@ for (const { app, port } of apps) {
   })
 }
 
-const PUBLIC = `http://127.0.0.1:3000`
-const ADMIN = `http://127.0.0.1:3001`
-const PARTNER = `http://127.0.0.1:3002`
+const PUBLIC = `http://127.0.0.1:${String(REHEARSAL_PORTS.public)}`
+const ADMIN = `http://127.0.0.1:${String(REHEARSAL_PORTS.admin)}`
+const PARTNER = `http://127.0.0.1:${String(REHEARSAL_PORTS.partner)}`
 
 async function mint(
   key: CryptoKey,
