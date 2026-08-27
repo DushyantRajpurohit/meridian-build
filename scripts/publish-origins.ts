@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { closeSync, openSync, readFileSync, unlinkSync, writeSync } from 'node:fs'
+import { ORIGIN_HEADER } from '../src/config'
 
 /**
  * §11 nominates this as the operations exercise, and it is a fair one: a quick tunnel's
@@ -180,10 +181,15 @@ function jitter(ms: number): number {
  * the process never exits.
  *
  * So the probe asks the question from outside instead. It fetches the hostname it published
- * and cares about *which kind* of failure comes back:
+ * and cares about *which kind* of answer comes back:
  *
- *   - any HTTP status, including 403 — the tunnel is fine. The origin refusing an unsigned
- *     request (R19) is a healthy path end to end, so a status code is the success condition.
+ *   - a response carrying ORIGIN_HEADER, whatever its status — the tunnel is fine. The origin
+ *     refusing an unsigned request with 403 (R19) is a healthy path end to end, so the status
+ *     code is not the success condition; the header is.
+ *   - a response without it — something that is not our origin answered. A reaped lease is a
+ *     zero-length 404 from Cloudflare, and 1033 is a 530 page; neither can be told from a real
+ *     origin response by status alone, which is how a dead hostname passed this check for
+ *     hours while the canonical hostname served 404.
  *   - a thrown fetch — DNS or connect failed, which means the hostname is gone.
  *
  * Two consecutive failures tear the connector down; the exit handler restarts it and the new
@@ -199,7 +205,7 @@ async function probeAll(): Promise<void> {
   const results = await Promise.all(
     live.map(async (surface) => ({
       surface,
-      ok: await answers(published.get(surface.name) as string),
+      ok: await originAnswers(published.get(surface.name) as string),
     })),
   )
 
@@ -247,16 +253,27 @@ async function probeAll(): Promise<void> {
   }
 }
 
+/** Did anything at all answer? Used for the control probe, which is not ours to stamp. */
 async function answers(url: string): Promise<boolean> {
+  return (await fetchOnce(url)) !== null
+}
+
+/** Did *our origin* answer? The success condition for a published hostname. */
+async function originAnswers(url: string): Promise<boolean> {
+  const headers = await fetchOnce(url)
+  return headers !== null && headers.get(ORIGIN_HEADER) !== null
+}
+
+async function fetchOnce(url: string): Promise<Headers | null> {
   try {
     const response = await fetch(url, { method: 'GET', signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) })
     // Not optional. An unread body leaves the socket checked out of undici's pool, so the
     // next probe against the same host waits for a connection that never frees and times out.
     // The supervisor then diagnoses its own leak as a dead tunnel and rebuilds a healthy one.
     await response.body?.cancel()
-    return true
+    return response.headers
   } catch {
-    return false
+    return null
   }
 }
 

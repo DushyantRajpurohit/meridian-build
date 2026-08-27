@@ -1,6 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { ORIGIN_HEADER as EDGE_ORIGIN_HEADER } from '../pages/functions/_lib/origin'
 import { signForOrigin } from '../pages/functions/_lib/sign'
 import { createAdminApp } from '../src/apps/admin'
+import { ORIGIN_HEADER as SERVICE_ORIGIN_HEADER } from '../src/config'
 import { createPublicApp } from '../src/apps/public'
 import { createFakeTeam, listen, type FakeTeam } from './harness'
 
@@ -140,5 +142,32 @@ describe('the edge signature itself', () => {
       })
       expect(response.status).toBe(200)
     }
+  })
+})
+
+/**
+ * The reaped-lease bug, pinned.
+ *
+ * The Function decides "the origin answered" by looking for a header the origin sets. The two
+ * halves declare that header separately — one in the Worker tree, one in the service tree —
+ * so nothing but a test stops them drifting apart, and drift here is silent: the Function
+ * would treat every real response as a dead tunnel and serve 502 for everything.
+ */
+describe('the origin marker', () => {
+  it('is spelled the same on both sides of the hop', () => {
+    expect(EDGE_ORIGIN_HEADER).toBe(SERVICE_ORIGIN_HEADER)
+  })
+
+  it('is what tells a reaped lease apart from a real origin 404', () => {
+    // Cloudflare's answer for a quick-tunnel hostname it no longer routes: a 404 with no body
+    // and no headers of ours. Status alone cannot distinguish it from the origin 404 below.
+    const reaped = new Response(null, { status: 404 })
+    const genuine = new Response('{"error":"not_found"}', {
+      status: 404,
+      headers: { 'content-type': 'application/json', [SERVICE_ORIGIN_HEADER]: 'public' },
+    })
+
+    expect(reaped.headers.get(EDGE_ORIGIN_HEADER)).toBeNull()
+    expect(genuine.headers.get(EDGE_ORIGIN_HEADER)).toBe('public')
   })
 })

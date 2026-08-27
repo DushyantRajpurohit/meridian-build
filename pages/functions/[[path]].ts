@@ -1,5 +1,5 @@
 import { gate } from './_lib/gate'
-import { originFor, forget, type Surface } from './_lib/origin'
+import { originFor, forget, ORIGIN_HEADER, type Surface } from './_lib/origin'
 import { signForOrigin } from './_lib/sign'
 
 /**
@@ -108,17 +108,21 @@ async function forward(
       redirect: 'manual',
     })
 
-    // A dead quick tunnel does NOT throw here, which is the trap. Cloudflare answers the
-    // subrequest itself with 530 (error 1033 — "the tunnel exists and has no healthy
-    // connector"), so `fetch` resolves normally and the caller would return that 530 to the
-    // visitor while an isolate holding the stale URL keeps doing so for its whole lifetime.
-    // Found by rotating the tunnel and watching the canonical hostname alternate between 200
-    // and 530 depending on which isolate answered.
+    // A dead quick tunnel does NOT throw here, which is the trap: `fetch` resolves normally
+    // and the caller would return Cloudflare's answer to the visitor while an isolate holding
+    // the stale URL keeps doing so for its whole lifetime.
     //
-    // Treating 530 as unreachable is safe because the origin cannot produce one: it is a
-    // Cloudflare edge status, not an application status, and every refusal this origin makes
-    // is a 401/403 with a reason code.
-    if (response.status === 530) return null
+    // There are two ways it resolves, and only one of them was handled here for a long time.
+    // A tunnel whose connectors have all gone gives 530 (error 1033 — the name still routes
+    // here, nothing is listening). A tunnel whose *lease was reaped* gives a zero-length 404
+    // with no content-type, because the name no longer routes here at all and Cloudflare is
+    // answering for a hostname it does not recognise. That second one is indistinguishable
+    // from an ordinary origin 404 by status alone, so the check below does not use the status.
+    //
+    // It asks the only question that actually separates them: did our origin produce this
+    // response? Every surface stamps ORIGIN_HEADER on everything it returns, including its
+    // refusals, and no edge answering on behalf of a name it does not route can forge it.
+    if (response.headers.get(ORIGIN_HEADER) === null) return null
 
     return response
   } catch {

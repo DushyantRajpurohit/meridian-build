@@ -12,6 +12,13 @@ import type { KeyValueStore } from './store'
 
 export type Surface = 'public' | 'admin' | 'partner'
 
+/**
+ * The header the origin stamps on every response, naming the surface that produced it.
+ * Declared again in src/config.ts — the two halves are written separately and pinned
+ * together by test/edge.test.ts, the same way the edge signature is.
+ */
+export const ORIGIN_HEADER = 'x-meridian-origin'
+
 export interface Route {
   surface: Surface
   /** Path as the origin should see it, after any prefix is stripped. */

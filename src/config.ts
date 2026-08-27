@@ -88,3 +88,13 @@ function port(value: string | undefined, fallback: number): number {
   const parsed = value === undefined ? Number.NaN : Number.parseInt(value, 10)
   return Number.isInteger(parsed) ? parsed : fallback
 }
+
+/**
+ * The header every surface stamps on every response, naming itself.
+ *
+ * The Pages Function requires it before accepting a response as the origin's (see
+ * pages/functions/_lib/origin.ts, which declares the same name), and the tunnel supervisor
+ * requires it before calling a published hostname healthy. Both halves are written
+ * separately and pinned together by test/edge.test.ts, the same way the edge signature is.
+ */
+export const ORIGIN_HEADER = 'x-meridian-origin'

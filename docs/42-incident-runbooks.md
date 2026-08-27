@@ -483,3 +483,71 @@ what it absorbed. None of mine did.
 **Recovery.** Nothing to fix at Cloudflare; the throttle expires. Stop the supervisor, wait,
 start it. With the backoff in place it now waits the throttle out on its own instead of
 extending it.
+
+---
+
+## Drill 8 (unplanned) — a health check that passed because the failure answered it
+
+**Symptom.** `meridian-clinic.pages.dev` returned `404` on every path — `/`, `/book`,
+`/v1/results`, `/admin`, a path that exists nowhere. Zero-length body, no `content-type`, no
+header of ours. Meanwhile every local check was green: all three surfaces listening, both
+private connectors up, the tunnel supervisor reporting nothing wrong for ten minutes, and
+`wrangler pages deployment tail` logging each request as `Ok` — the Function ran and threw
+nothing.
+
+**What it was.** The quick-tunnel hostnames in KV were dead. `cloudflared` was still running
+for all three, still holding connections, still silent; Cloudflare had reaped the leases.
+
+Two independent checks were built to catch exactly this, and both were reading the same wrong
+signal.
+
+The supervisor's probe fetched each published hostname and treated *any HTTP status* as
+health — deliberately, and with a comment explaining why: the origin refuses an unsigned
+request with `403`, so demanding a 2xx would have condemned a perfectly healthy path. The
+Function had the mirror of that reasoning, treating `530` as unreachable because 1033 is the
+status a reaped tunnel returns.
+
+Both were written against the reap that produced **530**, where the name still routes to the
+tunnel and nothing is listening behind it. This reap produced **404**: the name stopped
+routing here entirely, so Cloudflare answered for a hostname it does not recognise. A 404 is
+an HTTP status, so the probe called it health. A 404 is not 530, so the Function forwarded it.
+The system had two watchdogs for a dead tunnel and the dead tunnel returned the one status
+that satisfied both.
+
+The result was worse than no check at all. A supervisor that noticed would have rotated the
+hostnames within two minutes; instead it held the corpse in KV indefinitely, and the log line
+that would have said so — `probe failed` — never printed. The last honest signal in the
+journal was ten minutes before the outage, and it was a *success* message.
+
+**Fix.** Stop asking "did something answer" and start asking "did *my origin* answer". Every
+surface now stamps `x-meridian-origin` on every response including its refusals
+(`src/index.ts`), the probe requires it before calling a hostname healthy, and the Function
+requires it before accepting a response as the origin's — replacing the `530` check, which was
+a guess at one specific way the edge announces a dead name.
+
+The header is declared twice, once in each tree, because the two halves deploy separately;
+`test/edge.test.ts` pins them together, the same way it already pins the two HMAC
+implementations. Drift there would be silent and total — the Function would treat every real
+response as a dead tunnel and serve `502` for everything — so it gets a test rather than a
+comment.
+
+**What this cost, and the general shape of it.** Two hours of a site that was 404 while every
+dashboard was green. The lesson is not "check for 530 too". It is that a health check
+defined by *what the failure looks like* is only ever as current as the last failure you
+saw, and the failure mode is owned by somebody else — here, Cloudflare's error handling,
+which is free to change without telling me. A health check defined by *what success looks
+like* is owned by me. The first kind fails open, silently, at the worst moment. This one
+failed open into a status code that satisfied both of its own watchdogs.
+
+**Recovery.** `sudo systemctl restart meridian-apps meridian-origins` — the surfaces come back
+stamping the header, the supervisor rebuilds the three tunnels and republishes, and the
+Function picks up the new URLs on its next KV read. Verify with:
+
+```
+curl -sD- https://meridian-clinic.pages.dev/ | head -1     # 200, not 404 and not 502
+curl -s  http://127.0.0.1:3000/ -D- -o /dev/null | grep -i x-meridian-origin
+```
+
+A `502` after this is now the honest answer and a rotating one: the probe will notice within
+two minutes and rebuild. A `404` from the canonical hostname should never again be a
+transport failure — it can only come from the origin, and it will say so in the headers.
